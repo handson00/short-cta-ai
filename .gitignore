@@ -1,0 +1,10 @@
+node_modules/
+.next/
+data/uploads/
+data/artifacts/
+data/*.db
+data/*.db-*
+.env
+.env.local
+*.tsbuildinfo
+tests/fixtures/*.mp4

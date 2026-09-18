@@ -1,0 +1,75 @@
+import fs from "node:fs";
+import path from "node:path";
+
+function str(name: string, fallback = ""): string {
+  const v = process.env[name];
+  return v === undefined || v === "" ? fallback : v;
+}
+
+function bool(name: string, fallback: boolean): boolean {
+  const v = process.env[name];
+  if (v === undefined || v === "") return fallback;
+  return ["1", "true", "yes", "on"].includes(v.toLowerCase());
+}
+
+const dataDir = path.resolve(process.cwd(), str("DATA_DIR", "./data"));
+
+function defaultTessdataDir(): string {
+  const local = path.resolve(process.cwd(), "tessdata");
+  return fs.existsSync(local) ? local : "";
+}
+
+export const env = {
+  isProduction: process.env.NODE_ENV === "production",
+
+  appPassword: str("APP_PASSWORD"),
+  sessionSecret: str("APP_SESSION_SECRET"),
+  masterKey: str("SECRETS_MASTER_KEY"),
+
+  dataDir,
+  uploadsDir: path.join(dataDir, "uploads"),
+  artifactsDir: path.join(dataDir, "artifacts"),
+  databasePath: str("DATABASE_PATH", path.join(dataDir, "short-cta-ai.db")),
+
+  ghostcliApiKey: str("GHOSTCLI_API_KEY"),
+  ghostcliBaseUrl: str("GHOSTCLI_BASE_URL"),
+  ghostcliAuthHeader: str("GHOSTCLI_AUTH_HEADER", "authorization").toLowerCase(),
+
+  ffmpegPath: str("FFMPEG_PATH", "ffmpeg"),
+  ffprobePath: str("FFPROBE_PATH", "ffprobe"),
+  tesseractPath: str("TESSERACT_PATH", "tesseract"),
+
+  transcriptionProvider: str("TRANSCRIPTION_PROVIDER", "faster-whisper"),
+  fasterWhisper: {
+    python: str("FASTER_WHISPER_PYTHON", "python3"),
+    model: str("FASTER_WHISPER_MODEL", "small"),
+    device: str("FASTER_WHISPER_DEVICE", "cpu"),
+    computeType: str("FASTER_WHISPER_COMPUTE_TYPE", "int8"),
+    language: str("FASTER_WHISPER_LANGUAGE", "pt"),
+  },
+
+  visionProvider: str("VISION_PROVIDER", "tesseract"),
+  tesseractLangs: str("TESSERACT_LANGS", "por+eng"),
+  /**
+   * Pasta com os arquivos .traineddata. Uma pasta "tessdata" na raiz do
+   * projeto e usada automaticamente: assim o idioma portugues acompanha a
+   * aplicacao, sem depender de permissao de administrador para escrever
+   * dentro da instalacao do Tesseract.
+   */
+  tessdataDir: str("TESSDATA_DIR", defaultTessdataDir()),
+
+  searchProvider: str("SEARCH_PROVIDER", "none"),
+  searchHttpEndpoint: str("SEARCH_HTTP_ENDPOINT"),
+  searchHttpApiKey: str("SEARCH_HTTP_API_KEY"),
+
+  workerInProcess: bool("WORKER_IN_PROCESS", true),
+};
+
+/** Problemas de configuracao que a interface deve mostrar sem vazar valores. */
+export function configWarnings(): string[] {
+  const out: string[] = [];
+  if (!env.appPassword) out.push("APP_PASSWORD nao definida: a aplicacao esta aberta a quem alcancar a porta.");
+  if (!env.sessionSecret) out.push("APP_SESSION_SECRET nao definida: sessoes usam um segredo efemero e caem a cada reinicio.");
+  if (!env.masterKey) out.push("SECRETS_MASTER_KEY nao definida: a chave do GhostCLI so pode vir por variavel de ambiente, nao pela interface.");
+  return out;
+}
