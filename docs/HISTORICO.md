@@ -281,7 +281,8 @@ Para calibrar confiança no que está escrito:
 | Fila retoma após reinício | Servidor derrubado no meio do lote; jobs presos recuperados pela varredura |
 | Dedupe de frames funciona | Teste com vídeo estático: 6 instantes viram 1 frame |
 | OCR distingue gancho de legenda | Testes com fixtures, passando nos dois sistemas |
-| Detecção do CTA fixo em vídeo real | Corte de 78 s do acervo: texto conferido contra o post original |
+| Detecção do CTA fixo em vídeo real | Corte de 78 s do acervo: texto conferido contra o post original — **via `npm run cta:debug`, não pela interface** |
+| Fluxo completo até a interface, após a correção do OCR | **Não verificado.** O app não foi iniciado depois da correção (ver `HANDOFF.md` §5.6) |
 | Detecção de plataforma | 14 testes com os nomes de arquivo reais do acervo |
 | Backfill | Executado numa cópia do banco real antes de rodar no original |
 | Exportação CSV | Testes de escape de vírgula, aspas, quebra de linha e fórmula |

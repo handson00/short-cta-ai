@@ -109,6 +109,10 @@ Verificado de ponta a ponta, com vídeos reais processados:
   vizinhas são unidas num bloco só, e o bloco que permanece do começo ao fim no
   terço superior é promovido a "CTA detectado no vídeo". Verificado num corte
   real de 78 s: devolveu o texto exato do post, com confiança alta.
+  **Ressalva:** essa verificação foi feita por `npm run cta:debug`, que chama o
+  provedor de visão diretamente. O caminho completo da aplicação — job na fila →
+  `runner.ts` → gravação no banco → exibição na interface — ainda **não** foi
+  exercitado depois da correção. Ver §5.6.
 - Seleção múltipla na grade + exclusão em lote.
 - Exportação CSV/JSON com escape correto e proteção contra injeção de fórmula.
 - Player do post original embutido no painel, e rota de captura de metadados.
@@ -227,6 +231,26 @@ o trabalho anterior a essa data não tem histórico — o incidente descrito em
 
 A partir daqui: commite antes de qualquer alteração grande, e nunca use `sed`
 em lote sobre arquivo de código sem ter o `git status` limpo antes.
+
+---
+
+### 5.6 O que ainda não foi verificado depois da correção do OCR
+
+Registrado para ninguém confundir "corrigido" com "entregue":
+
+| Item | Situação |
+| --- | --- |
+| `npm run build` e `npm test` | ✅ rodados; 121/121 |
+| Detecção do CTA em vídeo real | ✅ via `npm run cta:debug`, texto conferido contra o post |
+| `npm start` com a correção aplicada | ❌ **nunca executado** |
+| Fluxo completo job → `runner.ts` → banco → interface | ❌ **nunca exercitado** após a correção |
+| Os 79 vídeos do acervo | ❌ ainda com o campo vazio; precisam de "Analisar novamente" |
+
+**Próximo passo concreto:** subir o app, pegar **um** vídeo (o `adz.mp4` serve, o
+texto esperado é "Essa garota está sendo perseguida por uma velha assustadora"),
+clicar em "Analisar novamente" e confirmar que o CTA aparece na tela. Só depois
+disso reprocessar o lote — se algo estiver errado, é melhor descobrir em um
+vídeo do que em 79.
 
 ---
 
