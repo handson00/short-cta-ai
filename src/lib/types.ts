@@ -59,6 +59,8 @@ export interface CtaSuggestion {
   readonly style: CtaStyle;
 }
 
+export type Confidence = "high" | "medium" | "low";
+
 export interface CtaStyle {
   styleExamples: string[];
 }
