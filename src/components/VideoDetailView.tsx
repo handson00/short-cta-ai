@@ -7,6 +7,7 @@ import { CONFIDENCE_LABEL, REGION_LABEL, TEXT_KIND_LABEL, formatBytes, formatDur
 import { aspectRatioStyle } from "@/lib/aspect";
 import StatusBadge from "./StatusBadge";
 import CopyButton from "./CopyButton";
+import CommentsPanel from "./CommentsPanel";
 
 export default function VideoDetailView({ initial }: { initial: VideoDetail }) {
   const [detail, setDetail] = useState(initial);
@@ -305,6 +306,8 @@ export default function VideoDetailView({ initial }: { initial: VideoDetail }) {
             </div>
           )}
         </section>
+
+        <CommentsPanel videoId={detail.id} postUrl={detail.source.originalUrl} />
       </div>
     </div>
   );

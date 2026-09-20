@@ -837,6 +837,209 @@ export function applyRetention(policy: { videoDays: number; transcriptDays: numb
 
 // --------------------------- Captura da origem ------------------------------
 
+/**
+ * Comentario do post de origem, coletado pela extensao (ver HANDOFF, §10).
+ *
+ * ATENCAO: `author` e `text` sao conteudo de terceiros vindo da internet. Se um
+ * dia alimentarem o modelo, precisam ir delimitados como dado, igual ao OCR e a
+ * transcricao - um comentario pode dizer "ignore as instrucoes anteriores".
+ */
+export interface PostComment {
+  id: string;
+  externalId: string | null;
+  parentExternalId: string | null;
+  author: string | null;
+  text: string;
+  likeCount: number | null;
+  publishedLabel: string | null;
+  position: number;
+}
+
+export interface CommentInput {
+  externalId?: string | null;
+  parentExternalId?: string | null;
+  author?: string | null;
+  text: string;
+  likeCount?: number | null;
+  publishedLabel?: string | null;
+}
+
+/**
+ * Substitui os comentarios do video pelos recem-capturados.
+ *
+ * Substituir, e nao acumular: o pedido e "os 20 ultimos comentarios", entao uma
+ * nova captura representa o estado atual do post. Acumular produziria uma
+ * mistura de leituras de datas diferentes sem como distinguir uma da outra.
+ */
+export function replaceComments(videoId: string, platform: string, comments: CommentInput[]): number {
+  const agora = nowIso();
+  const apagar = db().prepare("DELETE FROM post_comments WHERE video_id = ?");
+  const inserir = db().prepare(
+    `INSERT INTO post_comments
+       (id, video_id, platform, external_id, parent_external_id, author, text, like_count, published_label, position, captured_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+
+  const tx = db().transaction((items: CommentInput[]) => {
+    apagar.run(videoId);
+    let n = 0;
+    for (const [i, c] of items.entries()) {
+      const texto = (c.text ?? "").trim();
+      if (!texto) continue;
+      inserir.run(
+        newId("cmt"),
+        videoId,
+        platform,
+        c.externalId ?? null,
+        c.parentExternalId ?? null,
+        c.author ?? null,
+        texto,
+        typeof c.likeCount === "number" ? c.likeCount : null,
+        c.publishedLabel ?? null,
+        i,
+        agora,
+      );
+      n += 1;
+    }
+    return n;
+  });
+
+  return tx(comments) as number;
+}
+
+export function getComments(videoId: string): PostComment[] {
+  const rows = db()
+    .prepare("SELECT * FROM post_comments WHERE video_id = ? ORDER BY position")
+    .all(videoId) as Array<{
+      id: string;
+      external_id: string | null;
+      parent_external_id: string | null;
+      author: string | null;
+      text: string;
+      like_count: number | null;
+      published_label: string | null;
+      position: number;
+    }>;
+
+  return rows.map((r) => ({
+    id: r.id,
+    externalId: r.external_id,
+    parentExternalId: r.parent_external_id,
+    author: r.author,
+    text: r.text,
+    likeCount: r.like_count,
+    publishedLabel: r.published_label,
+    position: r.position,
+  }));
+}
+
+export function getCommentsCapturedAt(videoId: string): string | null {
+  const row = db()
+    .prepare("SELECT captured_at FROM post_comments WHERE video_id = ? LIMIT 1")
+    .get(videoId) as { captured_at: string } | undefined;
+  return row?.captured_at ?? null;
+}
+
+/** Acha o video pelo codigo do post, do jeito que a extensao conhece o video. */
+export function findVideoByPlatformId(platform: string, platformVideoId: string): { id: string } | null {
+  const row = db()
+    .prepare("SELECT id FROM videos WHERE platform = ? AND platform_video_id = ? AND purged_at IS NULL LIMIT 1")
+    .get(platform, platformVideoId) as { id: string } | undefined;
+  return row ?? null;
+}
+
+/**
+ * Grava os ganchos vindos dos comentarios SEM tocar nos de cena.
+ *
+ * `saveSuggestions` apaga tudo do video antes de inserir, porque uma nova
+ * analise substitui a anterior. Aqui e diferente: os dois conjuntos coexistem
+ * na tela, vem de evidencias diferentes e o usuario compara um com o outro.
+ * Entao so os de origem "comments" sao substituidos.
+ */
+export function replaceCommentSuggestions(
+  videoId: string,
+  items: { text: string; style: string; reason: string | null }[],
+): void {
+  const database = db();
+  const tx = database.transaction(() => {
+    // Se o escolhido era um gancho de comentario, a escolha some junto - deixar
+    // apontando para uma linha apagada quebraria a selecao do usuario.
+    database
+      .prepare(
+        `UPDATE user_selections SET chosen_cta_id = NULL
+         WHERE video_id = ? AND chosen_cta_id IN
+           (SELECT id FROM cta_suggestions WHERE video_id = ? AND origin = 'comments')`,
+      )
+      .run(videoId, videoId);
+    database.prepare("DELETE FROM cta_suggestions WHERE video_id = ? AND origin = 'comments'").run(videoId);
+
+    const base = (database.prepare("SELECT MAX(position) AS p FROM cta_suggestions WHERE video_id = ?").get(videoId) as
+      | { p: number | null }
+      | undefined)?.p ?? -1;
+
+    const insert = database.prepare(
+      `INSERT INTO cta_suggestions (id, video_id, analysis_id, text, style, reason, is_recommended, origin, position, created_at)
+       VALUES (?, ?, NULL, ?, ?, ?, 0, 'comments', ?, ?)`,
+    );
+    items.forEach((item, i) => {
+      insert.run(newId("cta"), videoId, item.text, item.style, item.reason, base + 1 + i, nowIso());
+    });
+  });
+  tx();
+}
+
+export interface PublishKit {
+  description: string;
+  hashtags: string[];
+  sendTrigger: string | null;
+  titleStrategy: string | null;
+  audienceRead: string | null;
+  createdAt: string;
+}
+
+export function savePublishKit(videoId: string, kit: Omit<PublishKit, "createdAt">): void {
+  db()
+    .prepare(
+      `INSERT INTO publish_kits (video_id, description, hashtags_json, send_trigger, title_strategy, audience_read, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(video_id) DO UPDATE SET description = excluded.description,
+         hashtags_json = excluded.hashtags_json, send_trigger = excluded.send_trigger,
+         title_strategy = excluded.title_strategy, audience_read = excluded.audience_read,
+         created_at = excluded.created_at`,
+    )
+    .run(
+      videoId,
+      kit.description,
+      JSON.stringify(kit.hashtags),
+      kit.sendTrigger,
+      kit.titleStrategy,
+      kit.audienceRead,
+      nowIso(),
+    );
+}
+
+export function getPublishKit(videoId: string): PublishKit | null {
+  const row = db().prepare("SELECT * FROM publish_kits WHERE video_id = ?").get(videoId) as
+    | {
+        description: string;
+        hashtags_json: string;
+        send_trigger: string | null;
+        title_strategy: string | null;
+        audience_read: string | null;
+        created_at: string;
+      }
+    | undefined;
+  if (!row) return null;
+  return {
+    description: row.description,
+    hashtags: parseJson<string[]>(row.hashtags_json, []),
+    sendTrigger: row.send_trigger,
+    titleStrategy: row.title_strategy,
+    audienceRead: row.audience_read,
+    createdAt: row.created_at,
+  };
+}
+
 export interface SourceCapture {
   platform: string;
   authorName: string | null;

@@ -31,6 +31,11 @@ export const env = {
   artifactsDir: path.join(dataDir, "artifacts"),
   databasePath: str("DATABASE_PATH", path.join(dataDir, "short-cta-ai.db")),
 
+  // Token que autoriza a extensao a enviar comentarios. Sem valor configurado,
+  // o endpoint de ingestao recusa tudo - um coletor que nao existe nao pode
+  // deixar uma porta aberta na maquina do usuario.
+  commentsIngestToken: str("COMMENTS_INGEST_TOKEN"),
+
   ghostcliApiKey: str("GHOSTCLI_API_KEY"),
   ghostcliBaseUrl: str("GHOSTCLI_BASE_URL"),
   ghostcliAuthHeader: str("GHOSTCLI_AUTH_HEADER", "authorization").toLowerCase(),

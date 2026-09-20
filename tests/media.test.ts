@@ -148,3 +148,38 @@ describe.runIf(hasFixtures)("OCR e classificação do texto", () => {
     expect(result.limitations.join(" ")).toMatch(/Descrição visual indisponível/);
   });
 });
+
+describe("parseTesseractTsv e a terminação de linha", () => {
+  // Regressão do bug que bloqueou o projeto por dois dias.
+  //
+  // O Tesseract do Windows escreve o TSV com CRLF. O parser cortava só por
+  // "\n", a última coluna do cabeçalho virava "text\r", indexOf("text") dava
+  // -1 e a leitura inteira era descartada em silêncio — nos 79 vídeos. No
+  // Linux, com "\n" puro, nada disso aparecia. Por isso este teste roda os
+  // dois formatos sobre a MESMA tabela.
+  const CABECALHO =
+    "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext";
+  const LINHAS = [
+    "5\t1\t1\t1\t1\t1\t100\t150\t300\t80\t96\tESSA",
+    "5\t1\t1\t1\t1\t2\t410\t150\t300\t80\t95\tGAROTA",
+  ];
+  const TAMANHO = { width: 1080, height: 1920 };
+
+  for (const [nome, quebra] of [
+    ["LF (Linux)", "\n"],
+    ["CRLF (Windows)", "\r\n"],
+  ] as const) {
+    it(`lê o texto com terminação ${nome}`, async () => {
+      const { parseTesseractTsv } = await import("../src/lib/providers/vision/tesseract");
+      const tsv = [CABECALHO, ...LINHAS].join(quebra) + quebra;
+      const linhas = parseTesseractTsv(tsv, 0, TAMANHO);
+
+      expect(linhas).toHaveLength(1);
+      expect(linhas[0].text).toBe("ESSA GAROTA");
+      // O \r não pode sobrar grudado na última coluna.
+      expect(linhas[0].text).not.toMatch(/\r/);
+      expect(linhas[0].left).toBe(100);
+      expect(linhas[0].confidence).toBeCloseTo(0.955, 2);
+    });
+  }
+});

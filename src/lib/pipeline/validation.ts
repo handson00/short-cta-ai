@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { CTA_STYLES, type CtaOptions, type CtaResult, type CtaSuggestion, type SceneAnalysis } from "../types";
+import { CTA_STYLES, type CtaOptions, type CtaResult, type CtaStyle, type CtaSuggestion, type SceneAnalysis } from "../types";
 import { dedupeSuggestions, evaluateCta, isGeneric, MAX_CHARS, similarity, styleDistribution } from "./ctaPlan";
 
 /**
@@ -232,3 +232,115 @@ export function validateCtaResult(
     recommendationReplaced,
   };
 }
+
+/** Resultado do CTA gerado a partir dos comentarios. */
+export interface CommentCtaResult {
+  suggestions: { text: string; style: CtaStyle; signal: string }[];
+  recommendedIndex: number;
+  audienceRead: string;
+}
+
+const commentCtaSchema = z.object({
+  suggestions: z
+    .array(
+      z.object({
+        text: z.string().min(3).max(MAX_CHARS),
+        style: z.enum(CTA_STYLES),
+        // Exigir o sinal e o que impede um gancho inventado com os comentarios
+        // de pano de fundo: sem apontar em que se apoia, nao entra.
+        signal: z.string().min(3).max(300),
+      }),
+    )
+    .min(1)
+    .max(12),
+  recommendedIndex: z.number().int().min(0),
+  audienceRead: z.string().min(3).max(400),
+});
+
+export function validateCommentCtaResult(raw: unknown): CommentCtaResult {
+  const parsed = commentCtaSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new InvalidModelOutput(
+      "O CTA por comentários não seguiu o contrato de saída",
+      parsed.error.issues.map((i) => `${i.path.join(".") || "raiz"}: ${i.message}`),
+    );
+  }
+  const dados = parsed.data;
+
+  // Duplicata nao acrescenta escolha, so ocupa espaco na tela.
+  const vistos = new Set<string>();
+  const suggestions = dados.suggestions.filter((sg) => {
+    const chave = sg.text.trim().toLowerCase();
+    if (vistos.has(chave)) return false;
+    vistos.add(chave);
+    return true;
+  });
+  if (suggestions.length === 0) {
+    throw new InvalidModelOutput("O modelo não devolveu nenhum gancho aproveitável", []);
+  }
+
+  const recommendedIndex =
+    dados.recommendedIndex < suggestions.length ? dados.recommendedIndex : 0;
+
+  return { suggestions, recommendedIndex, audienceRead: dados.audienceRead };
+}
+
+export interface PublishKitResult {
+  description: string;
+  hashtags: string[];
+  sendTrigger: string | null;
+  titleStrategy: string | null;
+  audienceRead: string | null;
+}
+
+/** Pedidos explicitos de engajamento fazem o Reels deixar de ser recomendado. */
+const ISCA_DE_ENGAJAMENTO =
+  /\b(comenta|comente|comentem|curta|curte|curtam|compartilh\w*|marca\s+(alguem|algu[ée]m|seu|sua)|salva\s+(esse|este|aqui)|salve\s+(esse|este)|manda\s+pra\s+geral|segue\s+(o\s+)?perfil|siga|inscreva)\b/i;
+
+const HASHTAG_GENERICA = /^#(viral|fyp|foryou|foryoupage|explore|explorar|parati|tiktok|reels|instagram|trend|trending)$/i;
+
+const publishKitSchema = z.object({
+  description: z.string().min(10).max(1200),
+  hashtags: z.array(z.string().min(2).max(60)).min(1).max(5),
+  sendTrigger: z.string().max(300).nullish(),
+  titleStrategy: z.string().max(300).nullish(),
+  audienceRead: z.string().max(400).nullish(),
+});
+
+export function validatePublishKit(raw: unknown): PublishKitResult {
+  const parsed = publishKitSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new InvalidModelOutput(
+      "O kit de publicação não seguiu o contrato de saída",
+      parsed.error.issues.map((i) => `${i.path.join(".") || "raiz"}: ${i.message}`),
+    );
+  }
+  const d = parsed.data;
+
+  if (ISCA_DE_ENGAJAMENTO.test(d.description)) {
+    throw new InvalidModelOutput(
+      "A legenda pede engajamento de forma explícita, o que faz o Reels deixar de ser recomendado",
+      [d.description.slice(0, 200)],
+    );
+  }
+
+  // Hashtag de volume nao traz alcance e mistura o video com qualquer assunto.
+  const hashtags = d.hashtags
+    .map((h) => (h.startsWith("#") ? h : `#${h}`))
+    .map((h) => h.replace(/\s+/g, ""))
+    .filter((h) => !HASHTAG_GENERICA.test(h))
+    .slice(0, 5);
+
+  if (hashtags.length === 0) {
+    throw new InvalidModelOutput("Todas as hashtags eram genéricas de volume", d.hashtags);
+  }
+
+  return {
+    description: d.description.trim(),
+    hashtags,
+    sendTrigger: d.sendTrigger ?? null,
+    titleStrategy: d.titleStrategy ?? null,
+    audienceRead: d.audienceRead ?? null,
+  };
+}
+

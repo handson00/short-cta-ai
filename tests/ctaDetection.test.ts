@@ -88,3 +88,35 @@ describe("normalizeText", () => {
     expect(normalizeText("Ação, é isso!")).toBe("ACAO E ISSO");
   });
 });
+
+describe("CTA fixo x legenda de diálogo", () => {
+  // Casos medidos no acervo real em 2026-09-18: 32 vídeos analisados, 7 CTAs
+  // corretos (persistência de 8 a 12 frames) e 13 falsos positivos (todos com
+  // persistência 1). Vários dos falsos eram texto perfeitamente legível, o que
+  // torna a confiança do OCR inútil para separá-los. O que separa é aparecer
+  // em mais de um instante.
+  it("não promove a CTA um texto que aparece em um único frame", () => {
+    const lines = [
+      line({ text: "EU SOU O ARQUEIRO VERDE", timestampSeconds: 3, top: 200, confidence: 0.96 }),
+    ];
+    const { existingCta } = classifyDetectedText(lines, 8);
+    expect(existingCta).toBeNull();
+  });
+
+  it("promove o mesmo texto quando ele permanece em vários frames", () => {
+    const lines = [0, 2, 4, 6].map((t) =>
+      line({ text: "EU SOU O ARQUEIRO VERDE", timestampSeconds: t, top: 200, confidence: 0.96 }),
+    );
+    const { existingCta } = classifyDetectedText(lines, 8);
+    expect(existingCta).not.toBeNull();
+    expect(existingCta!.text).toContain("ARQUEIRO VERDE");
+  });
+
+  it("ainda avalia um vídeo do qual só se conseguiu um frame", () => {
+    // Com um frame só não há como medir permanência; exigir persistência
+    // aqui seria transformar "não deu para verificar" em "não tem CTA".
+    const lines = [line({ text: "A CIDADE TINHA SO 1 SEGUNDO DE VIDA", timestampSeconds: 0, top: 200 })];
+    const { existingCta } = classifyDetectedText(lines, 1);
+    expect(existingCta).not.toBeNull();
+  });
+});

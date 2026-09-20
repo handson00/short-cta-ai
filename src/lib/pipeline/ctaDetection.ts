@@ -345,7 +345,19 @@ export function classifyDetectedText(lines: OcrLine[], frameCount: number): Clas
 
   candidates.sort((a, b) => b.score - a.score);
 
-  const best = candidates.find((c) => c.type === "possible_hook" && c.score >= 6) ?? null;
+  // Um CTA fixo aparece em MAIS DE UM instante - e exatamente isso que o separa
+  // de uma legenda de dialogo, que troca a cada frame.
+  //
+  // Medido no acervo real (32 videos, 2026-09-18): os 7 acertos tinham
+  // persistencia entre 8 e 12 frames; os 13 falsos positivos tinham todos
+  // persistencia 1, sem excecao. Varios deles eram texto perfeitamente legivel
+  // ("EU SOU O ARQUEIRO VERDE", "DEVE TER UNS TREZENTOS METROS !") - legenda
+  // queimada no video, lida num frame so. Sem esta exigencia, o campo "CTA
+  // detectado" se enche de frases que parecem resultado e nao sao.
+  const best =
+    candidates.find(
+      (c) => c.type === "possible_hook" && c.score >= 6 && (frameCount <= 1 || (c.persistence ?? 1) >= 2),
+    ) ?? null;
   const existingCta: ExistingCtaDetection | null = best
     ? {
         text: best.text,

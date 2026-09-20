@@ -1,7 +1,8 @@
 import type { AIProvider, CtaOptions, CtaResult, SceneAnalysis, SceneContext } from "../../types";
 import type { AppSettings } from "../../settings";
-import { analysisSystemPrompt, buildAnalysisUserMessage, buildGenerationUserMessage, generationSystemPrompt, PROMPT_VERSION } from "../../prompts";
-import { extractJson, InvalidModelOutput, parseSceneAnalysis, validateCtaResult, type ValidatedCtaResult } from "../../pipeline/validation";
+import { analysisSystemPrompt, buildAnalysisUserMessage, buildCommentCtaUserMessage, buildGenerationUserMessage, buildPublishKitUserMessage, commentCtaSystemPrompt, publishKitSystemPrompt, generationSystemPrompt, PROMPT_VERSION } from "../../prompts";
+import { extractJson, InvalidModelOutput, parseSceneAnalysis, validateCommentCtaResult, validateCtaResult, validatePublishKit, type CommentCtaResult, type PublishKitResult, type ValidatedCtaResult } from "../../pipeline/validation";
+import type { CommentInsights } from "../../pipeline/commentInsights";
 import { chatCompletion, type ChatMessage, type ClientConfig, type ToolDefinition } from "./client";
 import { AiError } from "./errors";
 import { logAiRequest } from "../../aiLog";
@@ -94,6 +95,39 @@ export class GhostCliProvider implements AIProvider {
       (raw) => validateCtaResult(extractJson(raw), options, input),
     );
     return validated;
+  }
+
+  async generateCtasFromComments(
+    insights: CommentInsights,
+    analysis: SceneAnalysis | null,
+    count: number,
+  ): Promise<CommentCtaResult> {
+    const model = this.ctx.settings.ghostcli.generationModel;
+    const messages: ChatMessage[] = [
+      { role: "system", content: commentCtaSystemPrompt(count) },
+      { role: "user", content: buildCommentCtaUserMessage(insights, analysis) },
+    ];
+
+    const content = await this.converse("comment_ctas", model, messages, false);
+    return this.parseOrRepair<CommentCtaResult>("comment_ctas", model, messages, content, (raw) =>
+      validateCommentCtaResult(extractJson(raw)),
+    );
+  }
+
+  async generatePublishKit(
+    insights: CommentInsights | null,
+    analysis: SceneAnalysis | null,
+    existingCta: string | null,
+  ): Promise<PublishKitResult> {
+    const model = this.ctx.settings.ghostcli.generationModel;
+    const messages: ChatMessage[] = [
+      { role: "system", content: publishKitSystemPrompt() },
+      { role: "user", content: buildPublishKitUserMessage(insights, analysis, existingCta) },
+    ];
+    const content = await this.converse("publish_kit", model, messages, false);
+    return this.parseOrRepair<PublishKitResult>("publish_kit", model, messages, content, (raw) =>
+      validatePublishKit(extractJson(raw)),
+    );
   }
 
   /** Roda a conversa, resolvendo chamadas de ferramenta no servidor. */

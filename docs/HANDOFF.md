@@ -370,3 +370,66 @@ E uma peculiaridade deste ambiente: o shell que alcança a pasta do usuário é
 `tsc` de lá, mas `npm run build`, `npm test` e qualquer coisa que dependa de
 binário nativo (better-sqlite3, esbuild, SWC, Tesseract, FFmpeg do Windows)
 **precisa ser rodado pelo usuário no cmd dele**. Peça a saída e leia.
+
+---
+
+## 10. Comentários do post de origem
+
+Os comentários **não** vêm pelo botão "Capturar dados" — oEmbed não devolve
+comentários, nem no TikTok nem no Instagram. Ler comentários de posts de
+terceiros só seria possível automatizando um navegador logado, o que contraria
+os termos das duas plataformas e coloca a conta do usuário em risco.
+
+A decisão foi outra: **a aplicação não coleta, ela recebe.** Quem coleta é a
+extensão do usuário, na aba que ele já tem aberta, e envia para cá.
+
+### Contrato
+
+```
+POST http://localhost:3000/api/comments/ingest
+Authorization: Bearer <COMMENTS_INGEST_TOKEN do .env.local>
+Content-Type: application/json
+
+{
+  "postUrl": "https://www.instagram.com/reel/DbLs8h_xu5K/",
+  "comments": [
+    {
+      "externalId": "17912...",          // opcional; sem ele não há aninhamento
+      "parentExternalId": null,          // preenchido numa resposta
+      "author": "@fulano",
+      "text": "que filme é esse?",
+      "likeCount": 12,                   // opcional
+      "publishedLabel": "2 d"            // como a plataforma mostra; não é convertido
+    }
+  ]
+}
+```
+
+Respostas: `200` com `{ok, videoId, gravados}`; `401` token inválido; `404`
+nenhum vídeo importado corresponde ao post; `422` link não reconhecido ou
+formato inesperado; `503` token não configurado.
+
+### Decisões que não são óbvias
+
+- **O token, não o CORS, é a proteção.** CORS só decide o que o navegador deixa
+  ler; qualquer programa fora dele ignora. Por isso a rota exige o token e nunca
+  responde com credenciais. Sem `COMMENTS_INGEST_TOKEN`, ela recusa tudo — um
+  coletor que ainda não existe não pode deixar porta aberta na máquina.
+- **A rota não usa a sessão do app.** A extensão roda na aba do Instagram e não
+  tem o cookie desta aplicação.
+- **Captura substitui, não acumula.** O pedido é "os 20 últimos comentários", e
+  uma captura nova representa o estado atual do post. Acumular misturaria
+  leituras de datas diferentes sem como distinguir.
+- **O link é casado pelo código do post**, no mesmo formato que `source.ts`
+  grava em `platform_video_id`. URL fora do padrão devolve 422 em vez de
+  chutar: gravar comentários no vídeo errado é pior que não gravar.
+
+### Aviso para quem for usar isso na geração de CTA
+
+Comentário é **texto de terceiros vindo da internet** — é o vetor mais óbvio de
+injeção de prompt que este projeto tem. Se um dia alimentar o modelo, precisa ir
+delimitado e rotulado como dado, igual ao OCR e à transcrição já vão
+(`prompts.ts`, função `untrusted`). Hoje os comentários **não** entram em
+nenhum prompt: são só exibidos.
+
+Na interface eles são renderizados como texto puro, nunca como HTML.

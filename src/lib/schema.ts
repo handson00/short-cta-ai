@@ -190,6 +190,36 @@ CREATE TABLE IF NOT EXISTS source_captures (
   captured_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS post_comments (
+  id TEXT PRIMARY KEY,
+  video_id TEXT NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+  platform TEXT NOT NULL,
+  -- id do comentario na plataforma, quando o coletor consegue ler. Serve para
+  -- reconhecer resposta (parent_external_id) e para nao duplicar numa recaptura.
+  external_id TEXT,
+  parent_external_id TEXT,
+  author TEXT,
+  text TEXT NOT NULL,
+  like_count INTEGER,
+  -- data informada pela plataforma; costuma vir relativa ("2 d"), entao fica
+  -- como texto e nunca e convertida por adivinhacao.
+  published_label TEXT,
+  position INTEGER NOT NULL,
+  captured_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_post_comments_video ON post_comments(video_id, position);
+
+CREATE TABLE IF NOT EXISTS publish_kits (
+  video_id TEXT PRIMARY KEY REFERENCES videos(id) ON DELETE CASCADE,
+  description TEXT NOT NULL,
+  hashtags_json TEXT NOT NULL DEFAULT '[]',
+  send_trigger TEXT,
+  title_strategy TEXT,
+  audience_read TEXT,
+  created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS app_settings (
   key TEXT PRIMARY KEY,
   value_json TEXT NOT NULL,

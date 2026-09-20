@@ -35,6 +35,7 @@ const lines = [
   "APP_PASSWORD=troque-esta-senha",
   `APP_SESSION_SECRET=${secret()}`,
   `SECRETS_MASTER_KEY=${secret()}`,
+  `COMMENTS_INGEST_TOKEN=${secret()}`,
   "",
   "# Credencial do GhostCLI. Deixe em branco para salvar pela interface.",
   "GHOSTCLI_API_KEY=",

@@ -190,6 +190,18 @@ export interface CtaOptions {
 export interface AIProvider {
   analyzeScene(input: SceneContext): Promise<SceneAnalysis>;
   generateCtas(input: SceneAnalysis, options: CtaOptions): Promise<CtaResult>;
+  /** Ganchos apoiados na reação do público, não na descrição da cena. */
+  generateCtasFromComments(
+    insights: import("./pipeline/commentInsights").CommentInsights,
+    analysis: SceneAnalysis | null,
+    count: number,
+  ): Promise<import("./pipeline/validation").CommentCtaResult>;
+  /** Legenda e hashtags, segundo o que hoje distribui um Reels. */
+  generatePublishKit(
+    insights: import("./pipeline/commentInsights").CommentInsights | null,
+    analysis: SceneAnalysis | null,
+    existingCta: string | null,
+  ): Promise<import("./pipeline/validation").PublishKitResult>;
 }
 
 export interface TranscriptionProvider {

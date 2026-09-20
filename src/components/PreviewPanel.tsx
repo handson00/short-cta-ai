@@ -8,6 +8,7 @@ import { formatDateBR, PLATFORM_LABEL } from "@/lib/source";
 import { aspectRatioStyle } from "@/lib/aspect";
 import StatusBadge from "./StatusBadge";
 import CopyButton from "./CopyButton";
+import CommentsPanel, { urlDeCaptura } from "./CommentsPanel";
 
 interface Props {
   videoSummary: VideoSummary | null;
@@ -195,6 +196,22 @@ export default function PreviewPanel({ videoSummary, onChanged, onClose }: Props
                     >
                       {capturing ? "Capturando…" : "Capturar dados"}
                     </button>
+                    {/* Comentários não vêm por aqui: oEmbed não os devolve. Quem
+                        captura é a extensão, na aba do post. Este botão só abre
+                        o post com o marcador que a autoriza. */}
+                    {video.source.originalUrl && (
+                      <a
+                        className="btn-quiet px-2 py-0.5 text-[10px]"
+                        href={urlDeCaptura(video.source.originalUrl) ?? video.source.originalUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        Capturar comentários ↗
+                      </a>
+                    )}
+                    <a className="btn-quiet px-2 py-0.5 text-[10px]" href={`/video/${video.id}`}>
+                      Ver detalhe
+                    </a>
                   </div>
 
                   {showEmbed && (
@@ -431,6 +448,8 @@ export default function PreviewPanel({ videoSummary, onChanged, onClose }: Props
                 )}
               </div>
             )}
+
+            <CommentsPanel videoId={video.id} postUrl={video.source.originalUrl} compact />
           </div>
         </div>
       )}
