@@ -344,3 +344,51 @@ export function validatePublishKit(raw: unknown): PublishKitResult {
   };
 }
 
+
+// ----------------------- Optimized Comment CTA Result -----------------------
+
+export interface OptimizedCommentCtaResult {
+  suggestions: Array<{
+    text: string;
+    style: string;
+    signal: string;
+    technique: string;
+  }>;
+  recommendedIndex: number;
+  strategyExplained: string;
+}
+
+const optimizedCommentCtaSchema = z.object({
+  suggestions: z
+    .array(
+      z.object({
+        text: z.string().min(3).max(MAX_CHARS),
+        style: z.string(),
+        signal: z.string(),
+        technique: z.string(),
+      }),
+    )
+    .min(1)
+    .max(10),
+  recommendedIndex: z.number().int().min(0),
+  strategyExplained: z.string().min(10).max(500),
+});
+
+export function validateOptimizedCommentCtaResult(
+  raw: unknown,
+): OptimizedCommentCtaResult {
+  const parsed = optimizedCommentCtaSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new InvalidModelOutput(
+      "CTA otimizado não seguiu o contrato de saída",
+      parsed.error.issues.map((i) => `${i.path.join(".") || "raiz"}: ${i.message}`),
+    );
+  }
+  const result = parsed.data;
+  if (result.recommendedIndex >= result.suggestions.length) {
+    throw new InvalidModelOutput("recommendedIndex fora do intervalo", [
+      "recommendedIndex deve ser um índice válido na lista de sugestões",
+    ]);
+  }
+  return result;
+}

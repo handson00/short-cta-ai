@@ -1,5 +1,13 @@
 import type { AIProvider, CtaOptions, CtaResult, SceneAnalysis, SceneContext } from "../../types";
+import type { AIProvider, CtaOptions, CtaResult, SceneAnalysis, SceneContext } from "../../types";
 import type { AppSettings } from "../../settings";
+import { analysisSystemPrompt, buildAnalysisUserMessage, buildCommentCtaUserMessage, buildGenerationUserMessage, buildPublishKitUserMessage, commentCtaSystemPrompt, publishKitSystemPrompt, generationSystemPrompt, optimizedCommentCtaSystemPrompt, buildOptimizedCommentCtaUserMessage, PROMPT_VERSION } from "../../prompts";
+import { extractJson, InvalidModelOutput, parseSceneAnalysis, validateCommentCtaResult, validateCtaResult, validatePublishKit, validateOptimizedCommentCtaResult, type CommentCtaResult, type PublishKitResult, type ValidatedCtaResult, type OptimizedCommentCtaResult } from "../../pipeline/validation";
+import type { CommentInsights } from "../../pipeline/commentInsights";
+import { chatCompletion, type ChatMessage, type ClientConfig, type ToolDefinition } from "./client";
+import { AiError } from "./errors";
+import { logAiRequest } from "../../aiLog";
+import { searchProvider } from "../search";
 import { analysisSystemPrompt, buildAnalysisUserMessage, buildCommentCtaUserMessage, buildGenerationUserMessage, buildPublishKitUserMessage, commentCtaSystemPrompt, publishKitSystemPrompt, generationSystemPrompt, PROMPT_VERSION } from "../../prompts";
 import { extractJson, InvalidModelOutput, parseSceneAnalysis, validateCommentCtaResult, validateCtaResult, validatePublishKit, type CommentCtaResult, type PublishKitResult, type ValidatedCtaResult } from "../../pipeline/validation";
 import type { CommentInsights } from "../../pipeline/commentInsights";
@@ -130,6 +138,26 @@ export class GhostCliProvider implements AIProvider {
     );
   }
 
+  async generateCtasFromCommentsOptimized(
+    insights: CommentInsights,
+    analysis: SceneAnalysis | null,
+    count: number,
+  ): Promise<OptimizedCommentCtaResult> {
+    const model = this.ctx.settings.ghostcli.generationModel;
+    const messages: ChatMessage[] = [
+      { role: "system", content: optimizedCommentCtaSystemPrompt(count) },
+      { role: "user", content: buildOptimizedCommentCtaUserMessage(insights, analysis) },
+    ];
+
+    const content = await this.converse("comment_ctas_optimized", model, messages, false);
+    return this.parseOrRepair<OptimizedCommentCtaResult>(
+      "comment_ctas_optimized",
+      model,
+      messages,
+      content,
+      (raw) => validateOptimizedCommentCtaResult(extractJson(raw)),
+    );
+  }
   /** Roda a conversa, resolvendo chamadas de ferramenta no servidor. */
   private async converse(
     operation: string,

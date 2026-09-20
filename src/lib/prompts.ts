@@ -423,3 +423,169 @@ export function buildPublishKitUserMessage(
   return untrusted(lines.join("\n"));
 }
 
+
+// ---------------------- CTA Otimizado por Estratégia -----------------------
+
+/**
+ * Gera CTAs otimizados não apenas pelos sinais, mas pela ESTRATÉGIA principal
+ * detectada na análise de comentários. Cada estratégia tem técnicas diferentes
+ * de copywriting para maximizar engagement.
+ */
+export function optimizedCommentCtaSystemPrompt(count: number): string {
+  return `${CORE_PROMPT}
+
+CONTEXTO: Os comentários mostram padrões de engajamento. Cada padrão sugere uma
+estratégia diferente de CTA - não é só aproveitar a demanda, é analisar POR QUE
+o público reagiu e criar um gancho que repita aquele engajamento.
+
+ESTRATÉGIAS POSSÍVEIS E SUAS TÉCNICAS:
+
+1. RESOLVE DÚVIDA (muita gente pergunta qual é o nome)
+   - Técnica: "Promessa de resposta que não entrega"
+   - Exemplo padrão: "Qual é o nome desse filme? 👇" → transformar em gancho
+   - Por quê: Demanda comprovada. Um gancho que promete responder está
+     apoiado no que o público já demonstrou querer.
+   - Tom: Direto, curioso, sem revelar o título.
+   
+2. SUSPENSE (muita confusão sobre o que acontece na trama)
+   - Técnica: "Nomear a lacuna, não preencher"
+   - Exemplo: Se vários perguntam "por que ele fez isso?", o gancho é
+     "Você entendeu por que ele..."
+   - Por quê: A confusão já está plantada. Aprofunde-a para fazer voltar.
+   - Tom: Intrigante, deixa questão aberta.
+
+3. FOMO (muita gente respondendo e debatendo)
+   - Técnica: "Sugerir uma discussão em andamento"
+   - Exemplo: "Tem coisa acontecendo nos comentários..." "Debate aberto..."
+   - Por quê: Alto engajamento em cascata. Fazer voltar para LER respostas.
+   - Tom: Inclusivo, social, "vem pra cá".
+
+4. CURIOSIDADE (muitos likes, alto engajamento geral)
+   - Técnica: "Revelar um detalhe pequeno para querer o todo"
+   - Exemplo: "Isso aqui é demais 😱" "Só fãs de X vão entender"
+   - Por quê: Engajamento puro. Atiçar a curiosidade sem revelar.
+   - Tom: Admirado, surpreso, atraente.
+
+5. DEBATE (muitas opiniões divergentes, argumentações)
+   - Técnica: "Nomeie o conflito, deixe em aberto"
+   - Exemplo: Se há debate sobre se o personagem foi justo, gancho: "Será que
+     ele estava certo?"
+   - Por quê: Pessoas querem discutir. Dê uma tese para elas discordar (ou concordar).
+   - Tom: Provocador, pensante, "o que você acha?".
+
+COMO ESCOLHER A ESTRATÉGIA:
+- Se o análise passou "estrategiaPrincipal", use AQUELA em 2-3 ganchos.
+- Use as outras estratégias para cobrir diferentes ângulos.
+- NUNCA invente sinal. Se não vê suspense nos comentários, não gera CTA de suspense.
+
+CONTRATO DE SAÍDA:
+{
+  "suggestions": [
+    {
+      "text": "string - o gancho (até ${MAX_CHARS} caracteres)",
+      "style": "string - tipo do gancho (resolveDuvida|suspense|fomo|curiosidade|debate)",
+      "signal": "string - qual sinal dos comentários sustenta este gancho",
+      "technique": "string - que técnica de copywriting foi usada"
+    }
+  ],
+  "recommendedIndex": number,
+  "strategyExplained": "string - por que essa é a melhor estratégia para este conjunto de comentários"
+}
+
+Gere ${count} ganchos. Cada um deve ter uma técnica diferente quando possível.
+Até ${MAX_CHARS} caracteres cada, em geral de 6 a 12 palavras.
+Nao use formulas: ${GENERIC_PATTERNS.slice(0, 4).join("; ")}.`;
+}
+
+export function buildOptimizedCommentCtaUserMessage(
+  insights: CommentInsights,
+  analysis: SceneAnalysis | null,
+): string {
+  const lines: string[] = [];
+
+  // Estratégia principal detectada
+  if (insights.estrategiaPrincipal) {
+    lines.push("ESTRATÉGIA RECOMENDADA");
+    switch (insights.estrategiaPrincipal) {
+      case "resolveDuvida":
+        lines.push(
+          `${insights.estrategias.resolveDuvida.frequencia} pessoas perguntaram o nome. ` +
+          `Gancho deve prometer revelar SEM revelar no texto.`,
+        );
+        break;
+      case "suspense":
+        lines.push(
+          `${insights.estrategias.suspense.confusaoCount} pessoas confusas sobre a trama. ` +
+          `Gancho deve aprofundar a lacuna, não preenchê-la.`,
+        );
+        break;
+      case "fomo":
+        lines.push(
+          `${insights.estrategias.fomo.debatesAtivos} debates ativos com ` +
+          `${insights.estrategias.fomo.perguntasEmDebate} respostas. ` +
+          `Gancho deve convidar para entrar na conversa.`,
+        );
+        break;
+      case "curiosidade":
+        lines.push(
+          `Alto engajamento geral (${insights.estrategias.curiosidade.mediaLikes} likes média). ` +
+          `Gancho deve atiçar curiosidade com detalhe pequeno.`,
+        );
+        break;
+      case "debate":
+        lines.push(
+          `${insights.estrategias.debate.opinioesDivergentes} opiniões divergentes detectadas. ` +
+          `Gancho deve nomear o conflito, deixar em aberto.`,
+        );
+        break;
+    }
+    lines.push("");
+  }
+
+  lines.push("SINAIS DOS COMENTÁRIOS");
+  lines.push(`- Total: ${insights.total} comentários, ${insights.totalRespostas} respostas.`);
+
+  if (insights.pedidosDeNome > 0) {
+    lines.push(
+      `- Demanda de identidade: ${insights.pedidosDeNome} pessoa(s) perguntaram o nome da obra.`,
+    );
+  }
+
+  if (insights.perguntasRecorrentes.length) {
+    lines.push("- Perguntas que se repetem (priorize em ordem):");
+    for (const p of insights.perguntasRecorrentes) {
+      lines.push(`  - (${p.vezes}x) ${p.texto}`);
+    }
+  }
+
+  if (insights.maisCurtidos.length) {
+    lines.push("- Ideias mais curtidas pelo público:");
+    for (const c of insights.maisCurtidos.slice(0, 3)) {
+      lines.push(`  - (${c.curtidas ?? 0} curtidas) ${c.texto}`);
+    }
+  }
+
+  if (insights.maisRespondidos.length) {
+    lines.push("- Pontos que geraram mais debate:");
+    for (const c of insights.maisRespondidos) {
+      lines.push(`  - (${c.respostas} respostas) ${c.texto}`);
+    }
+  }
+
+  if (insights.confusao.length) {
+    lines.push("- Dúvidas específicas do público:");
+    for (const c of insights.confusao) lines.push(`  - "${c}"`);
+  }
+
+  lines.push("");
+  lines.push("O CONTEXTO DA CENA");
+  if (analysis) {
+    lines.push(`- Resumo: ${analysis.sceneSummary}`);
+    if (analysis.conflict) lines.push(`- Conflito: ${analysis.conflict}`);
+    if (analysis.withhold) lines.push(`- Segredo: ${analysis.withhold}`);
+  } else {
+    lines.push("- Sem análise de cena. Trabalhe apenas com os comentários.");
+  }
+
+  return untrusted(lines.join("\n"));
+}

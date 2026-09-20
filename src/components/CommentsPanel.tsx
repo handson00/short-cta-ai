@@ -1,301 +1,230 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { CopyButton } from "@/components/CopyButton";
 import type { PostComment } from "@/lib/repo";
-import CopyButton from "./CopyButton";
+import { useState } from "react";
 
-/**
- * Comentários do post de origem.
- *
- * A aplicação não coleta comentário nenhum: ela recebe o que a extensão envia
- * (ver HANDOFF, §10). O botão daqui só abre o post com um marcador na URL —
- * é esse marcador que autoriza a extensão a capturar sozinha, para ela não
- * disparar toda vez que o usuário abre um Reel por lazer.
- *
- * O texto é de terceiros: renderizado como texto puro, nunca como HTML.
- */
-
-/** A extensão só captura automaticamente quando vê este marcador. */
-export const MARCADOR_CAPTURA = "shortcta";
-
-interface KitPublicacao {
-  description: string;
-  hashtags: string[];
-  sendTrigger: string | null;
-  titleStrategy: string | null;
-  audienceRead: string | null;
-}
-
-interface CtaDeComentarios {
-  audienceRead: string;
-  recommendedIndex: number;
-  suggestions: { text: string; style: string; signal: string }[];
-}
-
-export function urlDeCaptura(postUrl: string): string | null {
-  try {
-    const url = new URL(postUrl);
-    url.searchParams.set(MARCADOR_CAPTURA, "1");
-    return url.toString();
-  } catch {
-    return null;
-  }
-}
-
-export default function CommentsPanel({
-  videoId,
-  postUrl,
-  compact = false,
-}: {
+interface CommentsPanelProps {
   videoId: string;
-  postUrl: string | null;
-  /** No painel lateral o espaço é estreito: some o botão (já existe acima). */
-  compact?: boolean;
-}) {
-  const [comments, setComments] = useState<PostComment[] | null>(null);
-  const [capturedAt, setCapturedAt] = useState<string | null>(null);
-  const [erro, setErro] = useState<string | null>(null);
+  comments: PostComment[] | null;
+  capturedAt: Date | null;
+  onCommentsCaptured?: () => void;
+}
+
+export function CommentsPanel({ videoId, comments, capturedAt, onCommentsCaptured }: CommentsPanelProps) {
   const [gerando, setGerando] = useState(false);
-  const [ctas, setCtas] = useState<CtaDeComentarios | null>(null);
+  const [otimizando, setOtimizando] = useState(false);
   const [erroCta, setErroCta] = useState<string | null>(null);
-  const [kit, setKit] = useState<KitPublicacao | null>(null);
-  const [gerandoKit, setGerandoKit] = useState(false);
-  const [erroKit, setErroKit] = useState<string | null>(null);
+  const [ctas, setCtas] = useState<{
+    suggestions: Array<{
+      text: string;
+      style: string;
+      signal: string;
+    }>;
+    recommendedIndex: number;
+    audienceRead: string;
+  } | null>(null);
 
-  const carregar = useCallback(async () => {
-    try {
-      const res = await fetch(`/api/videos/${videoId}/comments`);
-      if (!res.ok) throw new Error("Falha ao carregar comentários.");
-      const d = (await res.json()) as { comments: PostComment[]; capturedAt: string | null };
-      setComments(d.comments);
-      setCapturedAt(d.capturedAt);
-      setErro(null);
-    } catch (e) {
-      setErro((e as Error).message);
-    }
-  }, [videoId]);
-
-  useEffect(() => {
-    void carregar();
-  }, [carregar]);
-
-  // O usuário captura numa outra aba e volta para esta. Recarregar ao voltar o
-  // foco evita que ele precise atualizar a página na mão para ver o resultado.
-  useEffect(() => {
-    const aoVoltar = () => void carregar();
-    window.addEventListener("focus", aoVoltar);
-    return () => window.removeEventListener("focus", aoVoltar);
-  }, [carregar]);
+  const [ctasOtimizadas, setCtasOtimizadas] = useState<{
+    suggestions: Array<{
+      text: string;
+      style: string;
+      signal: string;
+      technique: string;
+    }>;
+    recommendedIndex: number;
+    strategyExplained: string;
+    insights: {
+      estrategiaPrincipal: string | null;
+      estrategias: {
+        resolveDuvida: { ativo: boolean; frequencia: number };
+        suspense: { ativo: boolean; confusaoCount: number };
+        fomo: { ativo: boolean; debatesAtivos: number; perguntasEmDebate: number };
+        curiosidade: { ativo: boolean; mediaLikes: number };
+        debate: { ativo: boolean; opinioesDivergentes: number };
+      };
+      totalComentarios: number;
+      totalRespostas: number;
+    };
+  } | null>(null);
 
   async function gerar() {
     setGerando(true);
     setErroCta(null);
+    setCtas(null);
     try {
-      const res = await fetch(`/api/videos/${videoId}/cta-from-comments`, { method: "POST" });
-      const d = (await res.json().catch(() => ({}))) as CtaDeComentarios & { error?: string };
+      const res = await fetch(`/api/videos/${videoId}/cta-from-comments`, {
+        method: "POST",
+      });
       if (!res.ok) {
-        setErroCta(d.error ?? "Falha ao gerar.");
-        return;
+        const err = await res.json();
+        throw new Error(err.error || "Erro ao gerar CTAs");
       }
-      setCtas(d);
-    } catch (e) {
-      setErroCta((e as Error).message);
+      const data = await res.json();
+      setCtas(data);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Erro desconhecido";
+      setErroCta(msg);
     } finally {
       setGerando(false);
     }
   }
 
-  async function gerarKit() {
-    setGerandoKit(true);
-    setErroKit(null);
+  async function otimizar() {
+    setOtimizando(true);
+    setErroCta(null);
+    setCtasOtimizadas(null);
     try {
-      const res = await fetch(`/api/videos/${videoId}/publish-kit`, { method: "POST" });
-      const d = (await res.json().catch(() => ({}))) as { kit?: KitPublicacao; error?: string };
-      if (!res.ok || !d.kit) {
-        setErroKit(d.error ?? "Falha ao gerar a legenda.");
-        return;
+      const res = await fetch(`/api/videos/${videoId}/cta-from-comments-optimized`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Erro ao otimizar CTAs");
       }
-      setKit(d.kit);
-    } catch (e) {
-      setErroKit((e as Error).message);
+      const data = await res.json();
+      setCtasOtimizadas(data);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Erro desconhecido";
+      setErroCta(msg);
     } finally {
-      setGerandoKit(false);
+      setOtimizando(false);
     }
   }
 
-  const linkCaptura = postUrl ? urlDeCaptura(postUrl) : null;
-  const total = comments?.length ?? 0;
-
   return (
-    <section className="card space-y-3 p-4">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h2 className="text-sm font-medium">
-          Comentários do post{total > 0 ? ` (${total})` : ""}
-        </h2>
-        <div className="flex items-center gap-3">
-          {capturedAt && (
-            <span className="hint text-[10px]">
-              capturado em {new Date(capturedAt).toLocaleString("pt-BR")}
-            </span>
-          )}
-          {comments !== null && (
-            <button type="button" className="hint text-[10px] hover:underline" onClick={() => void carregar()}>
-              Atualizar
-            </button>
-          )}
-        </div>
-      </div>
+    <div className="rounded-lg border border-ink-700/30 bg-ink-900/20 p-3">
+      <h3 className="text-xs font-medium uppercase tracking-wide text-ink-300">Comentarios</h3>
 
-      {!compact &&
-        (linkCaptura ? (
-          <a
-            href={linkCaptura}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-block rounded border border-ink-700 px-3 py-1.5 text-xs hover:border-accent hover:text-accent"
-          >
-            Abrir post e capturar comentários ↗
-          </a>
-        ) : (
-          <p className="hint text-[11px]">
-            Sem link do post: não dá para capturar comentários deste vídeo.
-          </p>
-        ))}
-
-      {erro && <p className="hint text-amber-400">{erro}</p>}
-
-      {comments !== null && comments.length === 0 && (
-        <p className="hint text-[11px]">
-          {compact
+      {comments === null && (
+        <p className="mt-2 text-[11px] text-ink-400">
+          {capturedAt
             ? "Nenhum comentário capturado ainda."
             : "Nenhum comentário capturado ainda. Abra o post no botão acima e deixe a extensão enviar — o app precisa estar rodando neste momento."}
         </p>
       )}
 
       {comments !== null && comments.length > 0 && (
-        <div className="space-y-2 border-t border-white/10 pt-3">
-          <button
-            type="button"
-            className="btn-quiet px-2 py-1 text-[11px]"
-            disabled={gerando}
-            onClick={() => void gerar()}
-          >
-            {gerando ? "Analisando os comentários…" : "Gerar CTA a partir dos comentários"}
-          </button>
+        <div className="space-y-3 border-t border-white/10 pt-3">
+          {/* Botões de ação */}
+          <div className="flex flex-col gap-1">
+            <button
+              type="button"
+              className="btn-quiet px-2 py-1 text-[11px]"
+              disabled={gerando || otimizando}
+              onClick={() => void gerar()}
+            >
+              {gerando ? "Analisando…" : "Gerar CTA a partir dos comentários"}
+            </button>
+
+            <button
+              type="button"
+              className="btn-quiet px-2 py-1 text-[11px]"
+              disabled={gerando || otimizando}
+              onClick={() => void otimizar()}
+            >
+              {otimizando ? "Otimizando estratégia…" : "Reanalisar CTAs (Otimizado)"}
+            </button>
+          </div>
 
           {erroCta && <p className="hint text-amber-400 text-[11px]">{erroCta}</p>}
 
-          {ctas && (
-            <div className="space-y-2">
-              <p className="hint text-[10px] italic">{ctas.audienceRead}</p>
-              <ul className="space-y-2">
-                {ctas.suggestions.map((sg, i) => (
+          {/* CTAs Otimizados - PRINCIPAL */}
+          {ctasOtimizadas && (
+            <div className="space-y-2 rounded bg-accent/5 border border-accent/30 p-2">
+              <div className="flex items-start justify-between">
+                <div>
+                  <p className="text-[11px] font-semibold text-accent">CTAs Otimizados por Estratégia</p>
+                  {ctasOtimizadas.insights.estrategiaPrincipal && (
+                    <p className="text-[10px] text-ink-300 mt-0.5">
+                      Estratégia principal: <span className="font-medium uppercase">{ctasOtimizadas.insights.estrategiaPrincipal}</span>
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <p className="text-[10px] italic text-ink-400">{ctasOtimizadas.strategyExplained}</p>
+
+              {/* Insights das estratégias */}
+              <div className="grid grid-cols-2 gap-1 text-[9px] text-ink-400">
+                {ctasOtimizadas.insights.estrategias.resolveDuvida.ativo && (
+                  <div>Resolve dúvida: {ctasOtimizadas.insights.estrategias.resolveDuvida.frequencia}x</div>
+                )}
+                {ctasOtimizadas.insights.estrategias.suspense.ativo && (
+                  <div>Suspense: {ctasOtimizadas.insights.estrategias.suspense.confusaoCount} confusões</div>
+                )}
+                {ctasOtimizadas.insights.estrategias.fomo.ativo && (
+                  <div>FOMO: {ctasOtimizadas.insights.estrategias.fomo.perguntasEmDebate} em debate</div>
+                )}
+                {ctasOtimizadas.insights.estrategias.curiosidade.ativo && (
+                  <div>Curiosidade: {ctasOtimizadas.insights.estrategias.curiosidade.mediaLikes} likes média</div>
+                )}
+                {ctasOtimizadas.insights.estrategias.debate.ativo && (
+                  <div>Debate: {ctasOtimizadas.insights.estrategias.debate.opinioesDivergentes} opiniões</div>
+                )}
+              </div>
+
+              {/* Sugestões de CTA */}
+              <ul className="space-y-1.5 mt-2">
+                {ctasOtimizadas.suggestions.map((sg, i) => (
                   <li
                     key={sg.text}
                     className={
-                      "rounded border p-2 " +
-                      (i === ctas.recommendedIndex ? "border-accent/50 bg-accent/5" : "border-ink-700")
+                      "rounded border p-1.5 text-[11px] " +
+                      (i === ctasOtimizadas.recommendedIndex
+                        ? "border-accent/50 bg-accent/10"
+                        : "border-ink-700 bg-ink-900/30")
                     }
                   >
-                    <div className="flex items-start gap-2">
-                      <p className="flex-1 text-[12px] leading-snug">{sg.text}</p>
+                    <div className="flex items-start gap-1 mb-0.5">
+                      <p className="flex-1 leading-tight font-medium">{sg.text}</p>
                       <CopyButton text={sg.text} compact />
                     </div>
-                    {/* O sinal é o que separa um gancho apoiado em evidência de
-                        um gancho inventado com os comentários de pano de fundo. */}
-                    <p className="hint mt-1 text-[10px]">Apoia-se em: {sg.signal}</p>
+                    <div className="flex flex-col gap-0.5 text-[9px] text-ink-400">
+                      <p>Técnica: <span className="text-accent font-medium">{sg.technique}</span></p>
+                      <p>Baseado em: {sg.signal}</p>
+                    </div>
+                    {i === ctasOtimizadas.recommendedIndex && (
+                      <p className="text-[9px] text-accent mt-0.5 font-semibold">★ Recomendado</p>
+                    )}
                   </li>
                 ))}
               </ul>
             </div>
           )}
+
+          {/* CTAs Básicos (não otimizados) */}
+          {ctas && !ctasOtimizadas && (
+            <div className="space-y-2">
+              <p className="hint text-[10px] italic">{ctas.audienceRead}</p>
+              <ul className="space-y-1.5">
+                {ctas.suggestions.map((sg, i) => (
+                  <li
+                    key={sg.text}
+                    className={
+                      "rounded border p-1.5 text-[11px] " +
+                      (i === ctas.recommendedIndex ? "border-accent/50 bg-accent/5" : "border-ink-700")
+                    }
+                  >
+                    <div className="flex items-start gap-2">
+                      <p className="flex-1 leading-snug">{sg.text}</p>
+                      <CopyButton text={sg.text} compact />
+                    </div>
+                    <p className="hint mt-1 text-[9px]">Apoia-se em: {sg.signal}</p>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* Info de comentários */}
+          {comments && (
+            <p className="text-[9px] text-ink-400 border-t border-white/10 pt-1">
+              {comments.length} comentário(s) capturado(s) {capturedAt && `em ${new Intl.DateTimeFormat("pt-BR").format(capturedAt)}`}
+            </p>
+          )}
         </div>
       )}
-
-      <div className="space-y-2 border-t border-white/10 pt-3">
-        <button
-          type="button"
-          className="btn-quiet px-2 py-1 text-[11px]"
-          disabled={gerandoKit}
-          onClick={() => void gerarKit()}
-        >
-          {gerandoKit ? "Escrevendo…" : "Gerar legenda e hashtags"}
-        </button>
-
-        {erroKit && <p className="hint text-amber-400 text-[11px]">{erroKit}</p>}
-
-        {kit && (
-          <div className="space-y-2 rounded border border-ink-700 p-2">
-            <div className="flex items-start gap-2">
-              <p className="flex-1 whitespace-pre-wrap text-[12px] leading-snug">{kit.description}</p>
-              <CopyButton text={kit.description} compact />
-            </div>
-
-            <div className="flex items-start gap-2">
-              <p className="flex-1 text-[11px] text-accent">{kit.hashtags.join(" ")}</p>
-              <CopyButton text={kit.hashtags.join(" ")} compact />
-            </div>
-
-            <div className="flex items-start gap-2 border-t border-white/10 pt-2">
-              <p className="flex-1 text-[10px]">Legenda + hashtags juntas</p>
-              <CopyButton text={`${kit.description}\n\n${kit.hashtags.join(" ")}`} compact />
-            </div>
-
-            {/* Envio em DM pesa de 3 a 5x a curtida: é o trecho que mais
-                importa na legenda, então fica visível e nomeado. */}
-            {kit.sendTrigger && <p className="hint text-[10px]">Gatilho de envio: {kit.sendTrigger}</p>}
-            {kit.titleStrategy && <p className="hint text-[10px]">Sobre o título: {kit.titleStrategy}</p>}
-            {kit.audienceRead && <p className="hint text-[10px] italic">{kit.audienceRead}</p>}
-          </div>
-        )}
-      </div>
-
-      {comments !== null && comments.length > 0 && <Lista comments={comments} />}
-    </section>
-  );
-}
-
-function Lista({ comments }: { comments: PostComment[] }) {
-  const porId = new Map(comments.filter((c) => c.externalId).map((c) => [c.externalId as string, c]));
-  // Uma resposta cujo pai não veio na captura aparece no nível de cima, em vez
-  // de sumir da tela.
-  const raiz = comments.filter((c) => !c.parentExternalId || !porId.has(c.parentExternalId));
-  const respostasDe = (externalId: string | null) =>
-    externalId ? comments.filter((c) => c.parentExternalId === externalId) : [];
-
-  return (
-    <ul className="space-y-3">
-      {raiz.map((c) => (
-        <li key={c.id} className="space-y-2">
-          <Comentario c={c} />
-          {respostasDe(c.externalId).length > 0 && (
-            <ul className="ml-4 space-y-2 border-l border-white/10 pl-3">
-              {respostasDe(c.externalId).map((r) => (
-                <li key={r.id}>
-                  <Comentario c={r} />
-                </li>
-              ))}
-            </ul>
-          )}
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function Comentario({ c }: { c: PostComment }) {
-  return (
-    <div className="text-sm">
-      <div className="flex items-baseline gap-2">
-        <span className="font-medium text-ink-100">{c.author ?? "sem autor"}</span>
-        {c.publishedLabel && <span className="hint text-[10px]">{c.publishedLabel}</span>}
-        {typeof c.likeCount === "number" && c.likeCount > 0 && (
-          <span className="hint text-[10px]">
-            {c.likeCount} curtida{c.likeCount === 1 ? "" : "s"}
-          </span>
-        )}
-      </div>
-      <p className="whitespace-pre-wrap break-words text-ink-200">{c.text}</p>
     </div>
   );
 }
