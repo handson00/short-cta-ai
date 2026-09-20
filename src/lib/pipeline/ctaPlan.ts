@@ -1,4 +1,4 @@
-import { CTA_STYLES, type CtaStyle, type CtaSuggestion } from "../types";
+import type { CtaStyle, CtaSuggestion } from "../types";
 import { normalizeText } from "./ctaDetection";
 
 /**
@@ -21,7 +21,7 @@ const PRIORITY: CtaStyle[] = ["curiosidade", "suspense", "conflito", "reviravolt
 
 export function styleDistribution(count: number): Record<CtaStyle, number> {
   const total = Math.max(1, Math.round(count));
-  const out = Object.fromEntries(CTA_STYLES.map((s) => [s, 0])) as Record<CtaStyle, number>;
+  const out = Object.fromEntries(Object.keys(WEIGHTS).map((s: any) => [s, 0])) as Record<CtaStyle, number>;
 
   if (total <= PRIORITY.length) {
     for (let i = 0; i < total; i += 1) out[PRIORITY[i]] = 1;

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { CTA_STYLES, type CtaOptions, type CtaResult, type CtaStyle, type CtaSuggestion, type SceneAnalysis } from "../types";
+import { type CtaOptions, type CtaResult, type CtaStyle, type CtaSuggestion, type SceneAnalysis } from "../types";
 import { dedupeSuggestions, evaluateCta, isGeneric, MAX_CHARS, similarity, styleDistribution } from "./ctaPlan";
 
 /**
@@ -126,7 +126,7 @@ const ctaResultSchema = z.object({
     .array(
       z.object({
         text: z.string().trim().min(3).max(200),
-        style: z.enum(CTA_STYLES).catch("curiosidade"),
+        style: z.enum(["curiosidade", "suspense", "conflito", "reviravolta", "emocional", "ultracurto"] as const).catch("curiosidade"),
         reason: z.string().trim().max(300).nullish(),
       }),
     )
@@ -245,7 +245,7 @@ const commentCtaSchema = z.object({
     .array(
       z.object({
         text: z.string().min(3).max(MAX_CHARS),
-        style: z.enum(CTA_STYLES),
+        style: z.enum(["curiosidade", "suspense", "conflito", "reviravolta", "emocional", "ultracurto"] as const),
         // Exigir o sinal e o que impede um gancho inventado com os comentarios
         // de pano de fundo: sem apontar em que se apoia, nao entra.
         signal: z.string().min(3).max(300),

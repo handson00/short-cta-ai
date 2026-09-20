@@ -11,7 +11,10 @@ interface CommentsPanelProps {
   onCommentsCaptured?: () => void;
 }
 
-export function CommentsPanel({ videoId, comments, capturedAt, onCommentsCaptured }: CommentsPanelProps) {
+
+export const urlDeCaptura = "https://example.com/capture"; // URL padrão para captura de comentários
+
+export default function CommentsPanel({ videoId, comments, capturedAt, onCommentsCaptured }: CommentsPanelProps) {
   const [gerando, setGerando] = useState(false);
   const [otimizando, setOtimizando] = useState(false);
   const [erroCta, setErroCta] = useState<string | null>(null);

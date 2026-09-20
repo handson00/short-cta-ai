@@ -61,6 +61,31 @@ export interface CtaSuggestion {
 
 export type Confidence = "high" | "medium" | "low";
 
+export type JobStatus = "pending" | "processing" | "success" | "error" | "cancelled";
+export const ACTIVE_STATUSES: JobStatus[] = ["pending", "processing"];
+export const STATUS_LABEL: Record<JobStatus, string> = {
+  pending: "Aguardando",
+  processing: "Processando",
+  success: "Concluído",
+  error: "Erro",
+  cancelled: "Cancelado",
+};
+export const STYLE_LABEL: Record<string, string> = {
+  promise: "Promessa",
+  curiosity: "Curiosidade",
+  suspense: "Suspense",
+  fomo: "FOMO",
+};
+
+export type ExistingCtaDetection = "found" | "not_found" | "unclear";
+export type TextKind = "smi" | "gancho" | "text_other";
+export type TextRegion = { x: number; y: number; width: number; height: number };
+
+export interface CTA_STYLES {
+  name: string;
+}
+
+
 export interface CtaStyle {
   styleExamples: string[];
 }
