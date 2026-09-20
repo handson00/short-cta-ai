@@ -1,6 +1,6 @@
 "use client";
 
-import { CopyButton } from "@/components/CopyButton";
+import CopyButton from "@/components/CopyButton";
 import type { PostComment } from "@/lib/repo";
 import { useState } from "react";
 
