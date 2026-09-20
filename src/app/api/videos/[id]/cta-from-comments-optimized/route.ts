@@ -61,6 +61,6 @@ export async function POST(_request: Request, ctx: { params: Promise<{ id: strin
       },
     });
   } catch (err) {
-    return handleError(err, "Erro ao gerar CTAs otimizados");
+    return handleError(err);
   }
 }
