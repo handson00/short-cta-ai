@@ -1,54 +1,55 @@
-import { notFound } from "next/navigation";
-import { repo } from "@/lib/repo";
-import { provider } from "@/lib/providers";
+import { fail, handleError, json, requireAuth } from "@/lib/api";
+import * as repo from "@/lib/repo";
 import { extrairSinais } from "@/lib/pipeline/commentInsights";
+import { aiProvider } from "@/lib/providers/ai";
 
-export const maxDuration = 60;
+export const dynamic = "force-dynamic";
 
-export async function POST(req: Request, { params }: { params: { id: string } }) {
+/**
+ * Reanálisa e gera ganchos otimizados a partir dos comentários capturados.
+ * Detecta estratégias de engajamento e aplica técnicas de copywriting específicas.
+ */
+export async function POST(_request: Request, ctx: { params: Promise<{ id: string }> }) {
+  const denied = await requireAuth();
+  if (denied) return denied;
+
+  const { id } = await ctx.params;
+  if (!repo.getVideo(id)) return fail("Vídeo não encontrado.", 404);
+
+  // Carregar comentários capturados
+  const comments = repo.getComments(id);
+  if (comments.length === 0) {
+    return fail("Nenhum comentário capturado para este vídeo. Execute a captura primeiro.", 409);
+  }
+
+  // Analisar sinais dos comentários
+  const insights = extrairSinais(comments);
+  if (!insights.temSinal) {
+    return fail(insights.motivoSemSinal || "Comentários insuficientes para gerar CTA.", 422, {
+      insights,
+    });
+  }
+
   try {
-    const { id } = params;
-
-    // Encontrar video
-    const video = await repo.getVideoWithCta(id);
-    if (!video) return notFound();
-
-    // Carregar comentarios capturados
-    const comments = await repo.getComments(id);
-    if (!comments || comments.length === 0) {
-      return Response.json({
-        error: "Nenhum comentário capturado para este vídeo. Execute a captura primeiro.",
-      }, { status: 400 });
-    }
-
-    // Analisar sinais dos comentarios
-    const insights = extrairSinais(comments);
-    if (!insights.temSinal) {
-      return Response.json({
-        error: insights.motivoSemSinal || "Comentários insuficientes para gerar CTA.",
-      }, { status: 400 });
-    }
-
-    // Carregar analise de cena se existir
-    const scene = video.sceneAnalysis ? JSON.parse(video.sceneAnalysis as string) : null;
+    // Carregar análise de cena se existir
+    const scene = repo.latestSceneAnalysis(id);
 
     // Gerar CTAs OTIMIZADOS (com estratégias)
-    const result = await provider.ai.generateCtasFromCommentsOptimized(insights, scene, 3);
+    const provider = aiProvider({ videoId: id });
+    const result = await provider.generateCtasFromCommentsOptimized(insights, scene, 3);
 
     // Salvar resultado com origem 'comments-optimized'
-    const ctas = result.suggestions.map((s) => ({
-      text: s.text,
-      origin: "comments-optimized" as const,
-      type: "smi" as const,
-      style: s.style,
-      signal: s.signal,
-      technique: s.technique,
-      strategy: s.style,
-    }));
+    repo.replaceCommentSuggestions(
+      id,
+      result.suggestions.map((s) => ({
+        text: s.text,
+        style: s.style,
+        reason: s.signal || s.technique || null,
+      })),
+    );
 
-    await repo.replaceCtas(id, ctas);
-
-    return Response.json({
+    return json({
+      ok: true,
       suggestions: result.suggestions,
       recommendedIndex: result.recommendedIndex,
       strategyExplained: result.strategyExplained,
@@ -60,8 +61,6 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       },
     });
   } catch (err) {
-    console.error("[cta-from-comments-optimized]", err);
-    const msg = err instanceof Error ? err.message : "Erro interno";
-    return Response.json({ error: msg }, { status: 500 });
+    return handleError(err, "Erro ao gerar CTAs otimizados");
   }
 }

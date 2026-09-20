@@ -1,15 +1,7 @@
 import type { AIProvider, CtaOptions, CtaResult, SceneAnalysis, SceneContext } from "../../types";
-import type { AIProvider, CtaOptions, CtaResult, SceneAnalysis, SceneContext } from "../../types";
 import type { AppSettings } from "../../settings";
 import { analysisSystemPrompt, buildAnalysisUserMessage, buildCommentCtaUserMessage, buildGenerationUserMessage, buildPublishKitUserMessage, commentCtaSystemPrompt, publishKitSystemPrompt, generationSystemPrompt, optimizedCommentCtaSystemPrompt, buildOptimizedCommentCtaUserMessage, PROMPT_VERSION } from "../../prompts";
 import { extractJson, InvalidModelOutput, parseSceneAnalysis, validateCommentCtaResult, validateCtaResult, validatePublishKit, validateOptimizedCommentCtaResult, type CommentCtaResult, type PublishKitResult, type ValidatedCtaResult, type OptimizedCommentCtaResult } from "../../pipeline/validation";
-import type { CommentInsights } from "../../pipeline/commentInsights";
-import { chatCompletion, type ChatMessage, type ClientConfig, type ToolDefinition } from "./client";
-import { AiError } from "./errors";
-import { logAiRequest } from "../../aiLog";
-import { searchProvider } from "../search";
-import { analysisSystemPrompt, buildAnalysisUserMessage, buildCommentCtaUserMessage, buildGenerationUserMessage, buildPublishKitUserMessage, commentCtaSystemPrompt, publishKitSystemPrompt, generationSystemPrompt, PROMPT_VERSION } from "../../prompts";
-import { extractJson, InvalidModelOutput, parseSceneAnalysis, validateCommentCtaResult, validateCtaResult, validatePublishKit, type CommentCtaResult, type PublishKitResult, type ValidatedCtaResult } from "../../pipeline/validation";
 import type { CommentInsights } from "../../pipeline/commentInsights";
 import { chatCompletion, type ChatMessage, type ClientConfig, type ToolDefinition } from "./client";
 import { AiError } from "./errors";
