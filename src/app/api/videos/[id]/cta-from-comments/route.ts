@@ -39,7 +39,7 @@ export async function POST(_request: Request, ctx: { params: Promise<{ id: strin
 
     repo.replaceCommentSuggestions(
       id,
-      resultado.suggestions.map((s) => ({ text: s.text, style: s.style as string, reason: s.signal || null })),
+      resultado.suggestions.map((s) => ({ text: s.text, style: s.style as unknown as string, reason: s.signal || null })),
     );
 
     return json({
