@@ -28,7 +28,7 @@ export function db(): Database.Database {
 /** Bancos criados antes da funcionalidade TikTok ganham as colunas novas aqui. */
 function migrateTiktokColumns(handle: Database.Database): void {
   const columns = new Set(
-    (handle.pragma("table_info(videos)") as { name: string }[]).map((c) => c.name),
+    (handle.pragma("table_info(videos)") as { name: string }[]).map((c: any) => c.name),
   );
   const additions: [string, string][] = [
     ["source_folder", "TEXT"],

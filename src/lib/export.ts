@@ -27,7 +27,7 @@ const CONFIDENCE_LABEL: Record<string, string> = { high: "alta", medium: "média
 
 export function buildExportRows(videoIds?: string[]): ExportRow[] {
   const jobs = repo.latestJobsByVideo();
-  const videos = repo.listVideos().filter((v) => !videoIds || videoIds.includes(v.id));
+  const videos = repo.listVideos().filter((v: any) => !videoIds || videoIds.includes(v.id));
 
   return videos.map((video) => {
     const job = jobs.get(video.id);
@@ -36,11 +36,11 @@ export function buildExportRows(videoIds?: string[]): ExportRow[] {
     const work = repo.getWork(video.id);
     const visual = repo.getVisualAnalysis(video.id);
     const existing = repo.effectiveExistingCta(visual);
-    const recommended = suggestions.find((s) => s.isRecommended);
+    const recommended = suggestions.find((s: any) => s.isRecommended);
 
     const chosen =
       selection.editedText ??
-      suggestions.find((s) => s.id === selection.chosenCtaId)?.text ??
+      suggestions.find((s: any) => s.id === selection.chosenCtaId)?.text ??
       "";
 
     return {
@@ -51,8 +51,8 @@ export function buildExportRows(videoIds?: string[]): ExportRow[] {
       cta_recomendado: recommended?.text ?? "",
       cta_escolhido: chosen,
       alternativas: suggestions
-        .filter((s) => !s.isRecommended)
-        .map((s) => `${s.text} [${s.style}]`)
+        .filter((s: any) => !s.isRecommended)
+        .map((s: any) => `${s.text} [${s.style}]`)
         .join(" | "),
       status: STATUS_LABEL[(job?.status ?? "queued") as JobStatus] ?? (job?.status ?? ""),
     };
@@ -75,14 +75,14 @@ export function escapeCsvField(value: string): string {
 
 export function toCsv(rows: ExportRow[]): string {
   const header = CSV_COLUMNS.join(",");
-  const body = rows.map((row) => CSV_COLUMNS.map((c) => escapeCsvField(row[c])).join(","));
+  const body = rows.map((row) => CSV_COLUMNS.map((c: any) => escapeCsvField(row[c])).join(","));
   // BOM para o Excel reconhecer UTF-8; CRLF por compatibilidade.
   return `﻿${[header, ...body].join("\r\n")}\r\n`;
 }
 
 export function buildExportJson(videoIds?: string[]): unknown {
   const jobs = repo.latestJobsByVideo();
-  const videos = repo.listVideos().filter((v) => !videoIds || videoIds.includes(v.id));
+  const videos = repo.listVideos().filter((v: any) => !videoIds || videoIds.includes(v.id));
 
   return {
     exportedAt: new Date().toISOString(),
@@ -102,7 +102,7 @@ export function buildExportJson(videoIds?: string[]): unknown {
         existingCta: repo.effectiveExistingCta(visual),
         work: repo.getWork(video.id) ?? null,
         recommendedCta: analysis?.recommended ?? null,
-        suggestions: suggestions.map((s) => ({
+        suggestions: suggestions.map((s: any) => ({
           text: s.text,
           style: s.style,
           origin: s.origin,
@@ -110,7 +110,7 @@ export function buildExportJson(videoIds?: string[]): unknown {
         })),
         selection: {
           chosenText:
-            selection.editedText ?? suggestions.find((s) => s.id === selection.chosenCtaId)?.text ?? null,
+            selection.editedText ?? suggestions.find((s: any) => s.id === selection.chosenCtaId)?.text ?? null,
           edited: Boolean(selection.editedText),
           favorite: selection.favorite,
         },

@@ -20,6 +20,7 @@
     "cta:debug": "tsx scripts/pipeline-debug.ts"
   },
   "dependencies": {
+    "@next/swc-wasm-nodejs": "^16.3.5",
     "better-sqlite3": "^12.2.0",
     "dotenv": "^17.4.2",
     "next": "15.5.25",

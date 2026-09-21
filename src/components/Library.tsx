@@ -5,6 +5,7 @@ import type { QueueOverview, VideoSummary } from "@/lib/viewTypes";
 import { ACTIVE_STATUSES } from "@/lib/types";
 import VideoCard from "./VideoCard";
 import PreviewPanel from "./PreviewPanel";
+import ErrorBoundary from "./ErrorBoundary";
 
 type Filter = "todos" | "concluidos" | "processando" | "erro" | "favoritos";
 
@@ -39,30 +40,49 @@ export default function Library() {
   const folderRef = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(async () => {
-    const res = await fetch("/api/videos", { cache: "no-store" });
-    if (!res.ok) return;
-    const data = (await res.json()) as { videos: VideoSummary[]; queue: QueueOverview };
-    setVideos(data.videos);
-    setQueue(data.queue);
-    if (selectedVideo && !data.videos.find(v => v.id === selectedVideo.id)) {
-      setSelectedVideo(null);
+    try {
+      const res = await fetch("/api/videos", { cache: "no-store" });
+      if (!res.ok) {
+        setVideos([]);
+        setQueue(null);
+        setLoaded(true);
+        return;
+      }
+      const data = await res.json() as any;
+      if (!data || typeof data !== 'object' || !Array.isArray(data.videos)) {
+        setVideos([]);
+        setQueue(null);
+        setLoaded(true);
+        return;
+      }
+      setVideos(data.videos);
+      setQueue(data.queue);
+      if (selectedVideo && !data.videos.find((v: any) => v.id === selectedVideo.id)) {
+        setSelectedVideo(null);
+      }
+      // Um vídeo apagado em outra aba não pode continuar marcado aqui.
+      setSelectedIds((current) => {
+        if (current.size === 0) return current;
+        const vivos = new Set(data.videos.map((v: any) => v.id));
+        const mantidos = new Set([...current].filter((id) => vivos.has(id)));
+        return mantidos.size === current.size ? current : mantidos;
+      });
+      setLoaded(true);
+    } catch (err) {
+      console.error("Failed to load videos:", err);
+      setVideos([]);
+      setQueue(null);
+      setLoaded(true);
     }
-    // Um vídeo apagado em outra aba não pode continuar marcado aqui.
-    setSelectedIds((current) => {
-      if (current.size === 0) return current;
-      const vivos = new Set(data.videos.map((v) => v.id));
-      const mantidos = new Set([...current].filter((id) => vivos.has(id)));
-      return mantidos.size === current.size ? current : mantidos;
-    });
-    setLoaded(true);
   }, [selectedVideo]);
+
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
 
   const busy = useMemo(
-    () => videos.some((v) => v.status === "queued" || ACTIVE_STATUSES.includes(v.status)),
+    () => videos.some((v: any) => v.status === "queued" || ACTIVE_STATUSES.includes(v.status)),
     [videos],
   );
 
@@ -107,21 +127,21 @@ export default function Library() {
     let result = videos;
     switch (filter) {
       case "concluidos":
-        result = result.filter((v) => v.status === "done");
+        result = result.filter((v: any) => v.status === "done");
         break;
       case "processando":
-        result = result.filter((v) => v.status === "queued" || ACTIVE_STATUSES.includes(v.status));
+        result = result.filter((v: any) => v.status === "queued" || ACTIVE_STATUSES.includes(v.status));
         break;
       case "erro":
-        result = result.filter((v) => v.status === "error");
+        result = result.filter((v: any) => v.status === "error");
         break;
       case "favoritos":
-        result = result.filter((v) => v.favorite);
+        result = result.filter((v: any) => v.favorite);
         break;
     }
     if (searchTerm) {
       const term = searchTerm.toLowerCase();
-      result = result.filter((v) =>
+      result = result.filter((v: any) =>
         v.name.toLowerCase().includes(term) ||
         v.source.username?.toLowerCase().includes(term) ||
         v.source.originalUrl?.toLowerCase().includes(term)
@@ -186,8 +206,8 @@ export default function Library() {
     }
   }
 
-  const rejected = outcomes.filter((o) => o.status === "rejected");
-  const duplicates = outcomes.filter((o) => o.status === "duplicate");
+  const rejected = outcomes.filter((o: any) => o.status === "rejected");
+  const duplicates = outcomes.filter((o: any) => o.status === "duplicate");
 
   return (
     <div className="flex gap-4 h-screen">
@@ -196,7 +216,7 @@ export default function Library() {
         <div className="space-y-1">
           <h2 className="text-xs font-medium">Filtros</h2>
           <div className="space-y-0.5">
-            {FILTERS.map((f) => (
+            {FILTERS.map((f: any) => (
               <button
                 key={f.key}
                 onClick={() => setFilter(f.key)}
@@ -329,12 +349,12 @@ export default function Library() {
 
           {(rejected.length > 0 || duplicates.length > 0) && (
             <div className="mt-2 space-y-0.5 text-left text-[10px]">
-              {duplicates.map((o) => (
+              {duplicates.map((o: any) => (
                 <p key={`d-${o.file}`} className="text-amber-300">
                   {o.file}: {o.reason}
                 </p>
               ))}
-              {rejected.map((o) => (
+              {rejected.map((o: any) => (
                 <p key={`r-${o.file}`} className="text-red-400">
                   {o.file}: {o.reason}
                 </p>
@@ -356,7 +376,7 @@ export default function Library() {
               </span>
               <button
                 className="btn-quiet px-2 py-0.5 text-[10px]"
-                onClick={() => setSelectedIds(new Set(filtered.map((v) => v.id)))}
+                onClick={() => setSelectedIds(new Set(filtered.map((v: any) => v.id)))}
               >
                 Selecionar todos ({filtered.length})
               </button>
@@ -392,7 +412,7 @@ export default function Library() {
       </div>
 
       {/* Painel de detalhes à direita */}
-      <PreviewPanel videoSummary={selectedVideo} onChanged={refresh} onClose={() => setSelectedVideo(null)} />
+      <ErrorBoundary><PreviewPanel videoSummary={selectedVideo} onChanged={refresh} onClose={() => setSelectedVideo(null)} /></ErrorBoundary>
     </div>
   );
 }

@@ -51,7 +51,7 @@ export function videoSummary(video: repo.VideoRecord, job: repo.JobRecord | unde
     },
     suggestionCount: suggestions.length,
     chosenText:
-      selection.editedText ?? suggestions.find((s) => s.id === selection.chosenCtaId)?.text ?? null,
+      selection.editedText ?? suggestions.find((s: any) => s.id === selection.chosenCtaId)?.text ?? null,
     favorite: selection.favorite,
     createdAt: video.createdAt,
     source: {
@@ -69,7 +69,7 @@ export function videoSummary(video: repo.VideoRecord, job: repo.JobRecord | unde
 
 export function listSummaries(): VideoSummary[] {
   const jobs = repo.latestJobsByVideo();
-  return repo.listVideos().map((v) => videoSummary(v, jobs.get(v.id)));
+  return repo.listVideos().map((v: any) => videoSummary(v, jobs.get(v.id)));
 }
 
 
@@ -125,7 +125,7 @@ export function videoDetail(id: string): VideoDetail | null {
           segments: transcript.segments,
         }
       : null,
-    visibleText: (visual?.visibleText ?? []).map((t) => ({
+    visibleText: (visual?.visibleText ?? []).map((t: any) => ({
       text: t.text,
       timestampSeconds: t.timestampSeconds,
       region: t.region,
@@ -133,7 +133,7 @@ export function videoDetail(id: string): VideoDetail | null {
       ocrConfidence: t.ocrConfidence,
     })),
     limitations,
-    frames: repo.listFrames(id).map((f) => ({ id: f.id, timestampSeconds: f.timestampSeconds })),
+    frames: repo.listFrames(id).map((f: any) => ({ id: f.id, timestampSeconds: f.timestampSeconds })),
     workDetail: work
       ? {
           title: work.title,

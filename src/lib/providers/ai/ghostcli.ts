@@ -269,17 +269,18 @@ export class GhostCliProvider implements AIProvider {
     } catch (err) {
       if (!(err instanceof InvalidModelOutput)) throw err;
 
-      const repairMessages: ChatMessage[] = [
-        ...messages,
-        { role: "assistant", content },
-        {
+      const repairMessages: ChatMessage[] = [...messages];
+      const lastMessage = repairMessages[repairMessages.length - 1];
+      if (lastMessage?.role !== "assistant" || lastMessage.content !== content) {
+        repairMessages.push({ role: "assistant", content });
+      }
+      repairMessages.push({
           role: "user",
           content: `A resposta anterior não seguiu o contrato de saída. Problemas encontrados:
-${err.issues.map((i) => `- ${i}`).join("\n")}
+${err.issues.map((i: any) => `- ${i}`).join("\n")}
 
 Reenvie apenas o objeto JSON válido, sem texto ao redor e sem bloco de código.`,
-        },
-      ];
+      });
 
       const retry = await this.send(`${operation}_repair`, model, repairMessages, false);
       const retryContent = retry.message.content?.trim();

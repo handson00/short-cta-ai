@@ -54,8 +54,8 @@ export async function probe(filePath: string): Promise<MediaProbe> {
   }
 
   const streams = data.streams ?? [];
-  const video = streams.find((s) => s.codec_type === "video");
-  const audio = streams.find((s) => s.codec_type === "audio");
+  const video = streams.find((s: any) => s.codec_type === "video");
+  const audio = streams.find((s: any) => s.codec_type === "audio");
   const duration = Number(data.format?.duration ?? video?.duration ?? 0);
 
   const width = video?.width ?? null;

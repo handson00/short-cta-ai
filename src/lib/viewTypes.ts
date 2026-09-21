@@ -93,3 +93,14 @@ export interface VideoDetail extends VideoSummary {
   analysisMeta: { promptVersion: string; model: string | null; createdAt: string } | null;
   manualCtaText: string | null;
 }
+
+export interface PostComment {
+  id: string;
+  externalId: string | null;
+  parentExternalId: string | null;
+  author: string | null;
+  text: string;
+  likeCount: number | null;
+  publishedLabel: string | null;
+  position: number;
+}

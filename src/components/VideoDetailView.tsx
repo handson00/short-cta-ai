@@ -93,7 +93,7 @@ export default function VideoDetailView({ initial }: { initial: VideoDetail }) {
           <section className="card border-amber-500/30 bg-amber-500/5 p-4">
             <h2 className="text-sm font-medium text-amber-300">O que não foi observado</h2>
             <ul className="mt-1 list-disc space-y-0.5 pl-4 text-xs text-amber-200/80">
-              {detail.limitations.map((l) => (
+              {detail.limitations.map((l: any) => (
                 <li key={l}>{l}</li>
               ))}
             </ul>
@@ -187,7 +187,7 @@ export default function VideoDetailView({ initial }: { initial: VideoDetail }) {
               </p>
               {detail.workDetail.evidence.length > 0 && (
                 <ul className="list-disc pl-4 text-xs text-ink-400">
-                  {detail.workDetail.evidence.map((e) => (
+                  {detail.workDetail.evidence.map((e: any) => (
                     <li key={e}>{e}</li>
                   ))}
                 </ul>

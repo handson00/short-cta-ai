@@ -100,7 +100,7 @@ export function parseSceneAnalysis(raw: unknown): SceneAnalysis {
   if (!result.success) {
     throw new InvalidModelOutput(
       "A análise da cena não seguiu o contrato de saída",
-      result.error.issues.map((i) => `${i.path.join(".") || "raiz"}: ${i.message}`),
+      result.error.issues.map((i: any) => `${i.path.join(".") || "raiz"}: ${i.message}`),
     );
   }
   const value = result.data;
@@ -108,13 +108,35 @@ export function parseSceneAnalysis(raw: unknown): SceneAnalysis {
   // Uma obra "identificada" sem titulo e uma contradicao: rebaixamos.
   const work = value.work
     ? {
-        ...value.work,
+        title: value.work.title ?? null,
+        originalTitle: value.work.originalTitle ?? null,
+        year: value.work.year ?? null,
+        mediaType: value.work.mediaType ?? null,
         status: value.work.title ? value.work.status : ("not_identified_safely" as const),
         confidence: value.work.title ? value.work.confidence : ("low" as const),
+        evidence: value.work.evidence ?? [],
+        sources: value.work.sources ?? [],
       }
     : null;
 
-  return { ...value, work, speculation: value.speculation ?? [] };
+  return {
+    sceneSummary: value.sceneSummary,
+    analysisLimitations: value.analysisLimitations ?? [],
+    conflict: value.conflict ?? null,
+    curiosity: value.curiosity ?? null,
+    withhold: value.withhold ?? null,
+    speculation: value.speculation ?? [],
+    existingCta: value.existingCta
+      ? {
+          text: value.existingCta.text,
+          confidence: value.existingCta.confidence,
+          firstSeenAtSeconds: value.existingCta.firstSeenAtSeconds ?? null,
+          strength: value.existingCta.strength ?? null,
+          possibleImprovement: value.existingCta.possibleImprovement ?? null,
+        }
+      : null,
+    work,
+  };
 }
 
 const ctaResultSchema = z.object({
@@ -154,7 +176,7 @@ export function validateCtaResult(
   if (!parsed.success) {
     throw new InvalidModelOutput(
       "As sugestões não seguiram o contrato de saída",
-      parsed.error.issues.map((i) => `${i.path.join(".") || "raiz"}: ${i.message}`),
+      parsed.error.issues.map((i: any) => `${i.path.join(".") || "raiz"}: ${i.message}`),
     );
   }
 
@@ -162,16 +184,16 @@ export function validateCtaResult(
   const distribution = styleDistribution(options.count);
 
   let suggestions: CtaSuggestion[] = dedupeSuggestions(
-    parsed.data.suggestions.map((s) => ({ text: s.text, style: s.style, reason: s.reason ?? null })),
+    parsed.data.suggestions.map((s: any) => ({ text: s.text, style: s.style, reason: s.reason ?? null })),
   );
 
-  const tooLong = suggestions.filter((s) => s.text.length > MAX_CHARS);
+  const tooLong = suggestions.filter((s: any) => s.text.length > MAX_CHARS);
   if (tooLong.length) issues.push(`${tooLong.length} sugestão(ões) acima de ${MAX_CHARS} caracteres.`);
 
-  const generic = suggestions.filter((s) => isGeneric(s.text));
+  const generic = suggestions.filter((s: any) => isGeneric(s.text));
   if (generic.length) {
     issues.push(`${generic.length} sugestão(ões) com fórmula genérica foram descartadas.`);
-    suggestions = suggestions.filter((s) => !isGeneric(s.text));
+    suggestions = suggestions.filter((s: any) => !isGeneric(s.text));
   }
 
   if (suggestions.length === 0) {
@@ -184,22 +206,22 @@ export function validateCtaResult(
 
   for (const [style, expected] of Object.entries(distribution)) {
     if (expected === 0) continue;
-    const got = suggestions.filter((s) => s.style === style).length;
+    const got = suggestions.filter((s: any) => s.style === style).length;
     if (got === 0) issues.push(`Nenhuma sugestão do estilo ${style}.`);
   }
 
   const sceneTerms = [analysis.sceneSummary, analysis.conflict ?? "", analysis.curiosity ?? ""]
     .join(" ")
     .split(/\s+/)
-    .filter((w) => w.length > 4)
+    .filter((w: any) => w.length > 4)
     .slice(0, 40);
 
   const scored = suggestions
-    .map((s) => ({ cta: s, evaluation: evaluateCta(s, { others: suggestions, withhold: analysis.withhold, sceneTerms }) }))
+    .map((s: any) => ({ cta: s, evaluation: evaluateCta(s, { others: suggestions, withhold: analysis.withhold, sceneTerms }) }))
     .sort((a, b) => b.evaluation.total - a.evaluation.total);
 
   const modelChoice = parsed.data.recommendedCta;
-  const matched = suggestions.find((s) => similarity(s.text, modelChoice.text) >= 0.85);
+  const matched = suggestions.find((s: any) => similarity(s.text, modelChoice.text) >= 0.85);
   let recommendationReplaced = false;
 
   let recommendedText = modelChoice.text;
@@ -221,7 +243,7 @@ export function validateCtaResult(
     recommendedText = matched.text;
   }
 
-  if (!suggestions.some((s) => s.text === recommendedText)) {
+  if (!suggestions.some((s: any) => s.text === recommendedText)) {
     suggestions.unshift({ text: recommendedText, style: "curiosidade", reason: recommendedReason });
   }
 
@@ -262,7 +284,7 @@ export function validateCommentCtaResult(raw: unknown): CommentCtaResult {
   if (!parsed.success) {
     throw new InvalidModelOutput(
       "O CTA por comentários não seguiu o contrato de saída",
-      parsed.error.issues.map((i) => `${i.path.join(".") || "raiz"}: ${i.message}`),
+      parsed.error.issues.map((i: any) => `${i.path.join(".") || "raiz"}: ${i.message}`),
     );
   }
   const dados = parsed.data;
@@ -312,7 +334,7 @@ export function validatePublishKit(raw: unknown): PublishKitResult {
   if (!parsed.success) {
     throw new InvalidModelOutput(
       "O kit de publicação não seguiu o contrato de saída",
-      parsed.error.issues.map((i) => `${i.path.join(".") || "raiz"}: ${i.message}`),
+      parsed.error.issues.map((i: any) => `${i.path.join(".") || "raiz"}: ${i.message}`),
     );
   }
   const d = parsed.data;
@@ -326,9 +348,9 @@ export function validatePublishKit(raw: unknown): PublishKitResult {
 
   // Hashtag de volume nao traz alcance e mistura o video com qualquer assunto.
   const hashtags = d.hashtags
-    .map((h) => (h.startsWith("#") ? h : `#${h}`))
-    .map((h) => h.replace(/\s+/g, ""))
-    .filter((h) => !HASHTAG_GENERICA.test(h))
+    .map((h: any) => (h.startsWith("#") ? h : `#${h}`))
+    .map((h: any) => h.replace(/\s+/g, ""))
+    .filter((h: any) => !HASHTAG_GENERICA.test(h))
     .slice(0, 5);
 
   if (hashtags.length === 0) {
@@ -381,7 +403,7 @@ export function validateOptimizedCommentCtaResult(
   if (!parsed.success) {
     throw new InvalidModelOutput(
       "CTA otimizado não seguiu o contrato de saída",
-      parsed.error.issues.map((i) => `${i.path.join(".") || "raiz"}: ${i.message}`),
+      parsed.error.issues.map((i: any) => `${i.path.join(".") || "raiz"}: ${i.message}`),
     );
   }
   const result = parsed.data;

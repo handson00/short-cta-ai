@@ -131,7 +131,7 @@ export default function SettingsForm() {
       {status.warnings.length > 0 && (
         <section className="card border-amber-500/30 bg-amber-500/5 p-4 text-xs text-amber-200">
           <ul className="list-disc space-y-1 pl-4">
-            {status.warnings.map((w) => (
+            {status.warnings.map((w: any) => (
               <li key={w}>{w}</li>
             ))}
           </ul>
@@ -213,7 +213,7 @@ export default function SettingsForm() {
           </div>
         </div>
         <datalist id="model-suggestions">
-          {status.models.suggestions.map((m) => (
+          {status.models.suggestions.map((m: any) => (
             <option key={m} value={m} />
           ))}
         </datalist>

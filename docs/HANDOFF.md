@@ -433,3 +433,55 @@ delimitado e rotulado como dado, igual ao OCR e à transcrição já vão
 nenhum prompt: são só exibidos.
 
 Na interface eles são renderizados como texto puro, nunca como HTML.
+
+---
+
+## 10. Atualização 2026-09-21: crash do painel lateral resolvido
+
+### O que aconteceu
+
+Após as correções anteriores (OCR, `repo.ts`), o app buildava mas crashava ao clicar
+em qualquer vídeo: "Application error: a client-side exception has occurred". O
+typecheck passava limpo — era um erro de runtime invisível ao TypeScript.
+
+### Causa raiz
+
+O `CommentsPanel.tsx` importava `type { PostComment } from "@/lib/repo"`. Mesmo sendo
+`import type`, o bundler do Next.js resolve o módulo para tree-shaking e puxa o
+`better-sqlite3` (módulo nativo do Node) para o bundle do cliente, onde ele não existe.
+
+### Correção
+
+1. Tipo `PostComment` movido para `src/lib/viewTypes.ts`
+2. Import no `CommentsPanel` atualizado para `@/lib/viewTypes`
+3. `ErrorBoundary.tsx` criado e aplicado em volta do `PreviewPanel` (no `Library.tsx`)
+   e do `CommentsPanel` (dentro do `PreviewPanel`)
+4. Código de error boundary inline removido do `PreviewPanel` (tinha `useState` após
+   early return, violando regras dos hooks)
+
+### Regra para quem for editar componentes cliente
+
+**Nunca importe de `repo.ts`, `db.ts`, ou qualquer arquivo que toque o banco, em
+componentes `"use client"` — nem com `import type`.** Tipos que atravessam a fronteira
+servidor/cliente vivem em `viewTypes.ts`. Se precisar de um tipo novo no cliente,
+adicione lá primeiro.
+
+### Estado atual
+
+- Build: passa limpo
+- Typecheck: passa limpo (exit 0)
+- Painel lateral: abre ao clicar no vídeo, mostra thumbnail, metadados, CTAs, origem
+  e painel de comentários
+- ErrorBoundary: captura erros de renderização e exibe mensagem em vez de crashar
+
+### Arquivos alterados nesta sessão
+
+| Arquivo | O que mudou |
+| --- | --- |
+| `src/lib/viewTypes.ts` | Adicionado tipo `PostComment` |
+| `src/components/CommentsPanel.tsx` | Import de `PostComment` agora vem de `viewTypes` |
+| `src/components/ErrorBoundary.tsx` | Novo — Error Boundary com `componentDidCatch` |
+| `src/components/PreviewPanel.tsx` | Removido error boundary inline; `CommentsPanel` envolto em `ErrorBoundary` |
+| `src/components/Library.tsx` | `PreviewPanel` envolto em `ErrorBoundary` |
+| `docs/HISTORICO.md` | Seção 8 adicionada |
+| `docs/HANDOFF.md` | Esta seção |

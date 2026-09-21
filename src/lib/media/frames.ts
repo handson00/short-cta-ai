@@ -34,7 +34,7 @@ export function anchorTimestamps(durationSeconds: number): number[] {
   // O inicio reaproveita um instante que a lista ja cobre (1s, ou 0.5s em
   // video muito curto) em vez de inventar um novo: o objetivo e so garantir
   // que ele nunca seja descartado, nao adensar ainda mais o comeco.
-  const inicio = EARLY_TIMESTAMPS.filter((t) => t > 0 && t <= last)[0] ?? round2(last / 2);
+  const inicio = EARLY_TIMESTAMPS.filter((t: any) => t > 0 && t <= last)[0] ?? round2(last / 2);
   const meio = round2(durationSeconds * 0.5);
   const fim = round2(Math.min(last, durationSeconds * 0.92));
   return dedupe([inicio, meio, fim].sort((a, b) => a - b));
@@ -46,11 +46,11 @@ export function selectFrameTimestamps(durationSeconds: number, maxFrames: number
   // Margem para nao cair depois do ultimo quadro decodificavel.
   const last = Math.max(0, durationSeconds - 0.05);
 
-  const early = EARLY_TIMESTAMPS.filter((t) => t <= last);
+  const early = EARLY_TIMESTAMPS.filter((t: any) => t <= last);
   if (early.length === 0) early.push(0);
 
-  const representative = REPRESENTATIVE_FRACTIONS.map((f) => round2(durationSeconds * f)).filter((t) => t <= last);
-  const anchors = anchorTimestamps(durationSeconds).filter((t) => t <= last);
+  const representative = REPRESENTATIVE_FRACTIONS.map((f: any) => round2(durationSeconds * f)).filter((t: any) => t <= last);
+  const anchors = anchorTimestamps(durationSeconds).filter((t: any) => t <= last);
 
   const merged = dedupe([...early, ...representative, ...anchors].sort((a, b) => a - b));
   if (merged.length <= limit) return merged;
@@ -97,7 +97,7 @@ export function hammingDistance(a: string, b: string): number {
 export const NEAR_DUPLICATE_THRESHOLD = 5;
 
 export function isNearDuplicate(hash: string, seen: string[]): boolean {
-  return seen.some((h) => hammingDistance(hash, h) <= NEAR_DUPLICATE_THRESHOLD);
+  return seen.some((h: any) => hammingDistance(hash, h) <= NEAR_DUPLICATE_THRESHOLD);
 }
 
 /** Average hash a partir de 64 bytes em escala de cinza (8x8). */

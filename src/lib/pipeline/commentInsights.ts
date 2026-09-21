@@ -106,12 +106,12 @@ function ehSubstancial(texto: string): boolean {
   const limpo = normalizar(texto);
   if (limpo.length < 8) return false;
   if (/^(k+|ha+|rs+|haha+)(\s+(k+|ha+|rs+))*$/.test(limpo)) return false;
-  return limpo.split(" ").filter((p) => p.length > 2).length >= 2;
+  return limpo.split(" ").filter((p: any) => p.length > 2).length >= 2;
 }
 
 export function extrairSinais(comments: PostComment[]): CommentInsights {
-  const porId = new Map(comments.filter((c) => c.externalId).map((c) => [c.externalId as string, c]));
-  const raiz = comments.filter((c) => !c.parentExternalId || !porId.has(c.parentExternalId));
+  const porId = new Map(comments.filter((c: any) => c.externalId).map((c: any) => [c.externalId as string, c]));
+  const raiz = comments.filter((c: any) => !c.parentExternalId || !porId.has(c.parentExternalId));
   const totalRespostas = comments.length - raiz.length;
 
   const respostasPorPai = new Map<string, number>();
@@ -128,7 +128,7 @@ export function extrairSinais(comments: PostComment[]): CommentInsights {
 
   for (const c of comments) {
     const t = c.text.trim();
-    if (RE_PEDIDO_NOME.test(t)) pedidosDeNome += 1;
+    if (RE_PEDIDO_NOME.test(normalizar(t))) pedidosDeNome += 1;
     if (RE_CONFUSAO.test(t) && confusao.length < 5) confusao.push(t.slice(0, 200));
     if (RE_OPINIAO_FORTE.test(t)) opinioesDivergentes += 1;
 
@@ -140,10 +140,10 @@ export function extrairSinais(comments: PostComment[]): CommentInsights {
   }
 
   const perguntasRecorrentes = [...grupos.values()]
-    .filter((g) => g.vezes >= 2)
+    .filter((g: any) => g.vezes >= 2)
     .sort((a, b) => b.vezes - a.vezes)
     .slice(0, 5)
-    .map((g) => ({
+    .map((g: any) => ({
       ...g,
       estrategia: g.texto.toLowerCase().includes("qual o nome") || g.texto.toLowerCase().includes("que filme")
         ? "resolveDuvida"
@@ -158,13 +158,13 @@ export function extrairSinais(comments: PostComment[]): CommentInsights {
   });
 
   const maisCurtidos = comments
-    .filter((c) => ehSubstancial(c.text) && (c.likeCount ?? 0) > 0)
+    .filter((c: any) => ehSubstancial(c.text) && (c.likeCount ?? 0) > 0)
     .sort((a, b) => (b.likeCount ?? 0) - (a.likeCount ?? 0))
     .slice(0, 5)
     .map(resumir);
 
   const maisRespondidos = raiz
-    .filter((c) => nRespostas(c) >= 2 && ehSubstancial(c.text))
+    .filter((c: any) => nRespostas(c) >= 2 && ehSubstancial(c.text))
     .sort((a, b) => nRespostas(b) - nRespostas(a))
     .slice(0, 3)
     .map(resumir);
@@ -194,7 +194,7 @@ export function extrairSinais(comments: PostComment[]): CommentInsights {
     },
     curiosidade: {
       ativo: maisCurtidos.length >= 3,
-      curtidosAltos: maisCurtidos.filter((c) => (c.curtidas ?? 0) > 50).length,
+      curtidosAltos: maisCurtidos.filter((c: any) => (c.curtidas ?? 0) > 50).length,
       mediaLikes: Math.round(mediaLikes),
     },
     debate: {

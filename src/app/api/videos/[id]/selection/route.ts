@@ -24,7 +24,7 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
 
   if (body.keepAsStyleExample) {
     const text =
-      selection.editedText ?? repo.listSuggestions(id).find((s) => s.id === selection.chosenCtaId)?.text ?? "";
+      selection.editedText ?? repo.listSuggestions(id).find((s: any) => s.id === selection.chosenCtaId)?.text ?? "";
     if (text) repo.addStyleExample(text);
   }
 

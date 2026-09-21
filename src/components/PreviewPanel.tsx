@@ -9,6 +9,7 @@ import { aspectRatioStyle } from "@/lib/aspect";
 import StatusBadge from "./StatusBadge";
 import CopyButton from "./CopyButton";
 import CommentsPanel, { urlDeCaptura } from "./CommentsPanel";
+import ErrorBoundary from "./ErrorBoundary";
 
 interface Props {
   videoSummary: VideoSummary | null;
@@ -141,7 +142,7 @@ export default function PreviewPanel({ videoSummary, onChanged, onClose }: Props
             </div>
           </div>
 
-          {(video.source.username || video.source.originalUrl) && (
+          {(video.source?.username || video.source?.originalUrl) && (
             <div className="rounded border border-ink-700 bg-ink-850/60 p-2 space-y-1">
               <p className="text-[10px] uppercase tracking-wide text-ink-400">
                 Origem{video.source.platform ? ` ${PLATFORM_LABEL[video.source.platform] ?? video.source.platform}` : ""}
@@ -266,7 +267,7 @@ export default function PreviewPanel({ videoSummary, onChanged, onClose }: Props
               <p className="text-[10px] uppercase tracking-wide text-ink-400">
                 {video.existingCta.confidence === "high" ? "CTA detectado no vídeo" : "Possível CTA encontrado"} ·{" "}
                 {CONFIDENCE_LABEL[video.existingCta.confidence] ?? video.existingCta.confidence} · aos{" "}
-                {video.existingCta.firstSeenAtSeconds.toFixed(1)}s
+                {video.existingCta?.firstSeenAtSeconds?.toFixed(1) ?? "0.0"}s
               </p>
               <p className="text-xs">{video.existingCta.text}</p>
               {video.existingCtaReview?.strength && (
@@ -332,7 +333,7 @@ export default function PreviewPanel({ videoSummary, onChanged, onClose }: Props
           )}
 
           <p className="text-[10px] text-ink-400">
-            {video.work.identified ? video.work.label : "Obra não identificada com segurança"}
+            {video.work?.identified ? video.work.label : "Obra não identificada com segurança"}
           </p>
 
           <div className="space-y-2 pt-1">
@@ -449,7 +450,13 @@ export default function PreviewPanel({ videoSummary, onChanged, onClose }: Props
               </div>
             )}
 
-            <CommentsPanel videoId={video.id} postUrl={video.source.originalUrl} compact />
+            <ErrorBoundary>
+              {video.id && video.source?.originalUrl ? (
+                <CommentsPanel videoId={video.id} postUrl={video.source.originalUrl} compact />
+              ) : video.id ? (
+                <CommentsPanel videoId={video.id} postUrl={null} compact />
+              ) : null}
+            </ErrorBoundary>
           </div>
         </div>
       )}

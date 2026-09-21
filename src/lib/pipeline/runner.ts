@@ -68,10 +68,11 @@ export async function runJob(job: ClaimedJob): Promise<void> {
     }
 
     await stageGenerateCtas(job, video);
+    ensureNotCancelled(job.id);
 
     repo.setJobStatus(job.id, "done");
   } catch (err) {
-    if (err instanceof Cancelled) {
+    if (err instanceof Cancelled || repo.isCancelRequested(job.id)) {
       repo.setJobStatus(job.id, "canceled");
       releaseJob(job.id);
       return;
@@ -203,7 +204,7 @@ async function stageReadText(job: ClaimedJob, video: repo.VideoRecord): Promise<
 
   try {
     const analysis = await provider.analyzeFrames(
-      frames.map((f) => ({ path: f.path, timestampSeconds: f.timestampSeconds })),
+      frames.map((f: any) => ({ path: f.path, timestampSeconds: f.timestampSeconds })),
     );
     repo.saveVisualAnalysis(video.id, analysis);
   } catch (err) {
@@ -240,7 +241,7 @@ export function buildSceneContext(video: repo.VideoRecord): SceneContext {
     visual,
     existingCta,
     limitations: Array.from(new Set(limitations)),
-    styleExamples: repo.listStyleExamples().map((e) => e.text),
+    styleExamples: repo.listStyleExamples().map((e: any) => e.text),
     language: settings.generation.language,
   };
 }
@@ -303,7 +304,7 @@ async function stageGenerateCtas(job: ClaimedJob, video: repo.VideoRecord): Prom
     creativity: settings.generation.creativity,
     avoidSpoilers: settings.toggles.spoilerPrevention,
     useExistingCtaAsReference: settings.toggles.useExistingCtaAsReference,
-    styleExamples: repo.listStyleExamples().map((e) => e.text),
+    styleExamples: repo.listStyleExamples().map((e: any) => e.text),
   };
 
   const provider = aiProvider({ videoId: video.id, jobId: job.id });
@@ -315,7 +316,7 @@ async function stageGenerateCtas(job: ClaimedJob, video: repo.VideoRecord): Prom
     reason: string | null;
     isRecommended: boolean;
     origin: "generated" | "original" | "manual";
-  }[] = result.suggestions.map((s) => ({
+  }[] = result.suggestions.map((s: any) => ({
     text: s.text,
     style: s.style,
     reason: s.text === result.recommendedCta.text ? result.recommendedCta.reason : (s.reason ?? null),
@@ -330,7 +331,7 @@ async function stageGenerateCtas(job: ClaimedJob, video: repo.VideoRecord): Prom
   // mas nunca e promovido a recomendado por antiguidade.
   const visual = repo.getVisualAnalysis(video.id);
   const existing = repo.effectiveExistingCta(visual);
-  if (existing && existing.confidence !== "low" && !items.some((i) => i.text === existing.text)) {
+  if (existing && existing.confidence !== "low" && !items.some((i: any) => i.text === existing.text)) {
     items.push({
       text: existing.text,
       style: "curiosidade",

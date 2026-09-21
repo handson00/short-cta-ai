@@ -41,7 +41,7 @@ export async function POST(_request: Request, ctx: { params: Promise<{ id: strin
     // Salvar resultado com origem 'comments-optimized'
     repo.replaceCommentSuggestions(
       id,
-      result.suggestions.map((s) => ({
+      result.suggestions.map((s: any) => ({
         text: s.text,
         style: s.style,
         reason: s.signal || s.technique || null,

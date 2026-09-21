@@ -29,7 +29,7 @@ export function styleDistribution(count: number): Record<CtaStyle, number> {
   }
 
   const weightSum = PRIORITY.reduce((a, s) => a + WEIGHTS[s], 0);
-  const exact = PRIORITY.map((s) => ({ style: s, value: (total * WEIGHTS[s]) / weightSum }));
+  const exact = PRIORITY.map((s: any) => ({ style: s, value: (total * WEIGHTS[s]) / weightSum }));
   let assigned = 0;
   for (const item of exact) {
     out[item.style] = Math.max(1, Math.floor(item.value));
@@ -57,8 +57,8 @@ export function styleDistribution(count: number): Record<CtaStyle, number> {
 
 export function describeDistribution(count: number): string {
   const dist = styleDistribution(count);
-  return PRIORITY.filter((s) => dist[s] > 0)
-    .map((s) => `${dist[s]} de ${s}`)
+  return PRIORITY.filter((s: any) => dist[s] > 0)
+    .map((s: any) => `${dist[s]} de ${s}`)
     .join(", ");
 }
 
@@ -83,7 +83,7 @@ export const ULTRASHORT_MAX_CHARS = 45;
 
 export function isGeneric(text: string): boolean {
   const n = normalizeText(text).toLowerCase();
-  return GENERIC_PATTERNS.some((p) => n.includes(normalizeText(p).toLowerCase()));
+  return GENERIC_PATTERNS.some((p: any) => n.includes(normalizeText(p).toLowerCase()));
 }
 
 export function wordCount(text: string): number {
@@ -117,8 +117,8 @@ export function evaluateCta(
 
   // Fidelidade: mede ancoragem na cena, nao veracidade — isso o modelo garante
   // ao trabalhar so com as evidencias.
-  const terms = ctx.sceneTerms.map((t) => normalizeText(t)).filter((t) => t.length > 3);
-  const overlap = terms.filter((t) => normalized.includes(t)).length;
+  const terms = ctx.sceneTerms.map((t: any) => normalizeText(t)).filter((t: any) => t.length > 3);
+  const overlap = terms.filter((t: any) => normalized.includes(t)).length;
   let fidelity = Math.min(3, overlap);
   if (terms.length > 0 && overlap === 0) {
     fidelity = 0;
@@ -148,15 +148,15 @@ export function evaluateCta(
   if (ctx.withhold) {
     const withheldTerms = normalizeText(ctx.withhold)
       .split(" ")
-      .filter((t) => t.length > 4);
-    const leaked = withheldTerms.filter((t) => normalized.includes(t)).length;
+      .filter((t: any) => t.length > 4);
+    const leaked = withheldTerms.filter((t: any) => normalized.includes(t)).length;
     if (withheldTerms.length > 0 && leaked / withheldTerms.length > 0.5) {
       spoiler = 0;
       notes.push("Parece antecipar a resolucao.");
     }
   }
 
-  const variety = ctx.others.some((o) => o.text !== cta.text && similarity(o.text, cta.text) > 0.7) ? 0 : 1;
+  const variety = ctx.others.some((o: any) => o.text !== cta.text && similarity(o.text, cta.text) > 0.7) ? 0 : 1;
   if (variety === 0) notes.push("Muito parecida com outra sugestao.");
 
   const total = fidelity + curiosity + clarity + size + spoiler + variety;
@@ -178,7 +178,7 @@ export function dedupeSuggestions(list: CtaSuggestion[]): CtaSuggestion[] {
   for (const item of list) {
     const text = item.text.trim();
     if (!text) continue;
-    if (out.some((o) => similarity(o.text, text) >= 0.85)) continue;
+    if (out.some((o: any) => similarity(o.text, text) >= 0.85)) continue;
     out.push({ ...item, text });
   }
   return out;

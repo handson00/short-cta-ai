@@ -141,12 +141,12 @@ export function describeTesseractError(err: unknown, langs: string): string {
   if (texto.includes("failed loading language") || texto.includes("could not initialize tesseract")) {
     const faltando = langs
       .split("+")
-      .filter((l) => texto.includes(`'${l}'`) || texto.includes(`${l}.traineddata`));
+      .filter((l: any) => texto.includes(`'${l}'`) || texto.includes(`${l}.traineddata`));
     const quais = faltando.length > 0 ? faltando.join(", ") : langs;
     return `pacote de idioma ausente (${quais}). Coloque o .traineddata em ./tessdata ou ajuste TESSERACT_LANGS.`;
   }
   if (texto.includes("excedeu")) return "o Tesseract excedeu o tempo limite.";
-  const primeiraLinha = (raw || "erro desconhecido").split("\n").find((l) => l.trim()) ?? "erro desconhecido";
+  const primeiraLinha = (raw || "erro desconhecido").split("\n").find((l: any) => l.trim()) ?? "erro desconhecido";
   return primeiraLinha.trim().slice(0, 200);
 }
 
@@ -162,7 +162,7 @@ export function parseTesseractTsv(
   // descarta TODA a leitura em silencio - o OCR parece "video sem texto".
   const rows = tsv
     .split(/\r?\n/)
-    .map((r) => r.split("\t").map((c) => c.replace(/\r$/, "")));
+    .map((r: any) => r.split("\t").map((c: any) => c.replace(/\r$/, "")));
   if (rows.length < 2) return [];
   const header = rows[0];
   const idx = (name: string) => header.indexOf(name);

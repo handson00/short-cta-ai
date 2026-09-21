@@ -288,3 +288,56 @@ Para calibrar confiança no que está escrito:
 | Exportação CSV | Testes de escape de vírgula, aspas, quebra de linha e fórmula |
 | GhostCLI | **Apenas contra o mock.** A API real nunca foi chamada |
 | Reparo do `repo.ts` | Diff contra cópia íntegra: só o recurso novo aparece |
+
+---
+
+## 8. O crash do "client-side exception" (2026-09-21)
+
+Após as correções do OCR e do `repo.ts`, o app buildava mas crashava ao clicar em
+qualquer vídeo na grade: "Application error: a client-side exception has occurred".
+O typecheck passava limpo, então era um erro de runtime que o TypeScript não pega.
+
+### Causa raiz
+
+O `CommentsPanel.tsx` importava `type { PostComment } from "@/lib/repo"`. O `repo.ts`
+toca o banco de dados via `better-sqlite3`, um módulo nativo do Node. Quando o Next.js
+faz o bundle do cliente, ele tenta incluir `repo.ts` inteiro no chunk do navegador — e
+o `better-sqlite3` não existe no browser. Isso causava o crash silencioso.
+
+O TypeScript não pega isso porque `import type` é apagado na compilação, mas o bundler
+do Next.js ainda resolve o módulo para tree-shaking, e aí o `better-sqlite3` entra no
+grafo de dependências do cliente.
+
+### Correção aplicada
+
+1. Movido o tipo `PostComment` para `src/lib/viewTypes.ts` (arquivo que já atravessa a
+   fronteira servidor/cliente sem tocar o banco).
+2. Atualizado o import no `CommentsPanel` para `import type { PostComment } from "@/lib/viewTypes"`.
+3. Criado `src/components/ErrorBoundary.tsx` — um Error Boundary real com `componentDidCatch`
+   para capturar erros de renderização e exibir a mensagem em vez de crashar.
+4. Envolvido o `PreviewPanel` no `Library.tsx` com `<ErrorBoundary>`.
+5. Envolvido o `CommentsPanel` dentro do `PreviewPanel` com `<ErrorBoundary>`.
+6. Removido código de error boundary inline problemático que tinha um `useState` sendo
+   chamado após um early return (violava as regras dos hooks do React).
+
+### Lição registrada
+
+**Nunca importe tipos de módulos que tocam o banco (`repo.ts`, `db.ts`) em componentes
+cliente.** Mesmo com `import type`, o bundler pode puxar o módulo inteiro. Tipos que
+atravessam a fronteira servidor/cliente devem viver em `viewTypes.ts` ou em arquivos
+dedicados que não importem nada do lado servidor.
+
+A regra geral: se um arquivo importa `better-sqlite3`, `node:fs`, `node:path`, ou qualquer
+módulo nativo, ele é servidor-only. Nenhum componente `"use client"` deve importar dele,
+nem mesmo com `import type`.
+
+### Verificação
+
+Após a correção, o build passou e o painel lateral abriu corretamente ao clicar nos
+vídeos, mostrando thumbnail, metadados, CTAs, origem e o painel de comentários.
+
+| Afirmação | Como foi verificada |
+| --- | --- |
+| Crash resolvido | Build passou + clique no vídeo abre painel sem erro |
+| CommentsPanel funciona | Painel de comentários renderiza com botões de gerar/otimizar CTA |
+| ErrorBoundary captura erros | Componente criado e testado — exibe mensagem em vez de crashar |

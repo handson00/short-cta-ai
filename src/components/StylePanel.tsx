@@ -48,7 +48,7 @@ export default function StylePanel() {
     void load();
   }
 
-  const chosen = videos.filter((v) => v.chosenText || v.favorite);
+  const chosen = videos.filter((v: any) => v.chosenText || v.favorite);
 
   return (
     <div className="space-y-5">

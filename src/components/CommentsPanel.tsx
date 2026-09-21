@@ -1,18 +1,34 @@
 "use client";
 
 import CopyButton from "@/components/CopyButton";
-import type { PostComment } from "@/lib/repo";
+import { parsePostUrl } from "@/lib/postUrl";
+import type { PostComment } from "@/lib/viewTypes";
 import { useState } from "react";
 
 interface CommentsPanelProps {
+  postUrl?: string | null;
+  compact?: boolean;
   videoId: string;
-  comments: PostComment[] | null;
-  capturedAt: Date | null;
+  comments?: PostComment[] | null;
+  capturedAt?: Date | null;
   onCommentsCaptured?: () => void;
 }
 
 
-export const urlDeCaptura = "https://example.com/capture"; // URL padrão para captura de comentários
+export function urlDeCaptura(rawUrl?: string | null): string | null {
+  if (!rawUrl) return null;
+
+  try {
+    const url = new URL(rawUrl);
+    const isInstagramHost = url.hostname === "instagram.com" || url.hostname.endsWith(".instagram.com");
+    if (!isInstagramHost || parsePostUrl(url.href)?.platform !== "instagram") return null;
+
+    url.searchParams.set("shortcta", "1");
+    return url.href;
+  } catch {
+    return null;
+  }
+}
 
 export default function CommentsPanel({ videoId, comments, capturedAt, onCommentsCaptured }: CommentsPanelProps) {
   const [gerando, setGerando] = useState(false);

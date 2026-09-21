@@ -111,7 +111,7 @@ export function queueCounts(): Record<string, number> {
        GROUP BY status`,
     )
     .all() as { status: string; total: number }[];
-  return Object.fromEntries(rows.map((r) => [r.status, r.total]));
+  return Object.fromEntries(rows.map((r: any) => [r.status, r.total]));
 }
 
 /** Cancela todos os jobs na fila ou ativos. Jobs concluídos ou com erro não são tocados. */

@@ -349,7 +349,7 @@ export function listFrames(videoId: string): { id: string; path: string; timesta
   const rows = db()
     .prepare("SELECT id, path, timestamp_seconds FROM frames WHERE video_id = ? ORDER BY timestamp_seconds")
     .all(videoId) as { id: string; path: string; timestamp_seconds: number }[];
-  return rows.map((r) => ({ id: r.id, path: r.path, timestampSeconds: r.timestamp_seconds }));
+  return rows.map((r: any) => ({ id: r.id, path: r.path, timestampSeconds: r.timestamp_seconds }));
 }
 
 // ------------------------------ Transcricao ---------------------------------
@@ -709,7 +709,7 @@ export function listSuggestions(videoId: string): StoredSuggestion[] {
     origin: string;
     position: number;
   }[];
-  return rows.map((r) => ({
+  return rows.map((r: any) => ({
     id: r.id,
     text: r.text,
     style: r.style as CtaStyle,
@@ -778,7 +778,7 @@ export function listStyleExamples(): StyleExample[] {
     note: string | null;
     created_at: string;
   }[];
-  return rows.map((r) => ({ id: r.id, text: r.text, note: r.note, createdAt: r.created_at }));
+  return rows.map((r: any) => ({ id: r.id, text: r.text, note: r.note, createdAt: r.created_at }));
 }
 
 /** Limite deliberado: o contexto e curadoria, nao um deposito. */
@@ -788,7 +788,7 @@ export function addStyleExample(text: string, note?: string | null): StyleExampl
   const trimmed = text.trim().slice(0, 200);
   if (!trimmed) return listStyleExamples();
   const existing = listStyleExamples();
-  if (existing.some((e) => e.text === trimmed)) return existing;
+  if (existing.some((e: any) => e.text === trimmed)) return existing;
   db()
     .prepare("INSERT INTO style_examples (id, text, note, created_at) VALUES (?, ?, ?, ?)")
     .run(newId("sty"), trimmed, note?.slice(0, 200) ?? null, nowIso());
@@ -921,7 +921,7 @@ export function getComments(videoId: string): PostComment[] {
       position: number;
     }>;
 
-  return rows.map((r) => ({
+  return rows.map((r: any) => ({
     id: r.id,
     externalId: r.external_id,
     parentExternalId: r.parent_external_id,

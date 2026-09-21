@@ -8,7 +8,7 @@ export async function GET(_request: Request, ctx: { params: Promise<{ id: string
   const denied = await requireAuth();
   if (denied) return denied;
   const { id, frameId } = await ctx.params;
-  const frame = repo.listFrames(id).find((f) => f.id === frameId);
+  const frame = repo.listFrames(id).find((f: any) => f.id === frameId);
   if (!frame || !fs.existsSync(frame.path)) return fail("Frame indisponível.", 404);
   const body = fs.readFileSync(frame.path);
   return new NextResponse(new Uint8Array(body), {

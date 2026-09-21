@@ -74,8 +74,8 @@ export class FasterWhisperProvider implements TranscriptionProvider {
 
     const warnings: string[] = [];
     const segments: TranscriptSegment[] = (parsed.segments ?? [])
-      .filter((s) => s.text.trim().length > 0)
-      .map((s) => {
+      .filter((s: any) => s.text.trim().length > 0)
+      .map((s: any) => {
         const lowConfidence = (s.avg_logprob ?? 0) < -1.0 || (s.no_speech_prob ?? 0) > 0.6;
         return {
           start: s.start,
@@ -86,7 +86,7 @@ export class FasterWhisperProvider implements TranscriptionProvider {
         };
       });
 
-    const lowConfidenceCount = segments.filter((s) => s.lowConfidence).length;
+    const lowConfidenceCount = segments.filter((s: any) => s.lowConfidence).length;
     if (segments.length > 0 && lowConfidenceCount / segments.length > 0.4) {
       warnings.push("Boa parte da transcricao saiu com baixa confianca; trate o texto como aproximado.");
     }
@@ -97,7 +97,7 @@ export class FasterWhisperProvider implements TranscriptionProvider {
     return {
       provider: this.name,
       language: parsed.language ?? null,
-      text: segments.map((s) => s.text).join(" ").trim(),
+      text: segments.map((s: any) => s.text).join(" ").trim(),
       segments,
       hasSpeech: segments.length > 0,
       lowConfidence: segments.length > 0 && lowConfidenceCount / segments.length > 0.4,

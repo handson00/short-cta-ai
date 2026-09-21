@@ -28,6 +28,7 @@ export interface TextCandidate extends VisibleText {
   score: number;
   reasons: string[];
   occurrences: number;
+  persistence?: number;
 }
 
 const HANDLE_RE = /(^|\s)@[\w.]{2,}/;
@@ -140,12 +141,12 @@ export function mergeAdjacentLines(lines: OcrLine[]): OcrLine[] {
 }
 
 function fundirBloco(bloco: OcrLine[]): OcrLine {
-  const left = Math.min(...bloco.map((l) => l.left));
-  const top = Math.min(...bloco.map((l) => l.top));
-  const right = Math.max(...bloco.map((l) => l.left + l.width));
-  const bottom = Math.max(...bloco.map((l) => l.top + l.height));
+  const left = Math.min(...bloco.map((l: any) => l.left));
+  const top = Math.min(...bloco.map((l: any) => l.top));
+  const right = Math.max(...bloco.map((l: any) => l.left + l.width));
+  const bottom = Math.max(...bloco.map((l: any) => l.top + l.height));
   return {
-    text: bloco.map((l) => l.text.trim()).join(" ").replace(/\s+/g, " ").trim(),
+    text: bloco.map((l: any) => l.text.trim()).join(" ").replace(/\s+/g, " ").trim(),
     left,
     top,
     width: right - left,
@@ -160,8 +161,8 @@ function fundirBloco(bloco: OcrLine[]): OcrLine {
 /** Um bloco largo ou centralizado nao e marca d'agua, por menor que seja. */
 function pareceMarcaDeCanto(group: Group): boolean {
   const first = group.lines[0];
-  const left = Math.min(...group.lines.map((l) => l.left));
-  const right = Math.max(...group.lines.map((l) => l.left + l.width));
+  const left = Math.min(...group.lines.map((l: any) => l.left));
+  const right = Math.max(...group.lines.map((l: any) => l.left + l.width));
   const larguraRelativa = (right - left) / Math.max(1, first.frameWidth);
   const centro = (left + right) / 2 / Math.max(1, first.frameWidth);
   const centralizado = Math.abs(centro - 0.5) < 0.18;
@@ -173,11 +174,11 @@ function groupAcrossFrames(lines: OcrLine[]): Group[] {
   for (const line of lines) {
     const normalized = normalizeText(line.text);
     if (normalized.length < 3) continue;
-    const match = groups.find((g) => g.normalized === normalized || tokenSimilarity(g.normalized, normalized) >= 0.7);
+    const match = groups.find((g: any) => g.normalized === normalized || tokenSimilarity(g.normalized, normalized) >= 0.7);
     if (match) {
       match.lines.push(line);
       // Mantem a leitura com maior confianca como texto literal exibido.
-      if (line.confidence > Math.max(...match.lines.map((l) => l.confidence)) - 0.001) {
+      if (line.confidence > Math.max(...match.lines.map((l: any) => l.confidence)) - 0.001) {
         match.displayText = line.text.trim();
       }
     } else {
@@ -195,13 +196,13 @@ function classifyKind(group: Group, region: TextRegion, relativeHeight: number, 
   const text = group.displayText;
   const normalized = group.normalized;
   const words = normalized.split(" ").filter(Boolean);
-  const persistence = new Set(group.lines.map((l) => l.timestampSeconds)).size;
+  const persistence = new Set(group.lines.map((l: any) => l.timestampSeconds)).size;
 
   if (HANDLE_RE.test(text) || URL_RE.test(text)) {
     return { kind: "possible_handle", reasons: ["Parece perfil ou endereço de site."] };
   }
   const lower = text.toLowerCase();
-  if (PLATFORM_WORDS.some((w) => lower.includes(w))) {
+  if (PLATFORM_WORDS.some((w: any) => lower.includes(w))) {
     return { kind: "possible_watermark", reasons: ["Contém termo típico de marca d'água ou chamada de plataforma."] };
   }
   // Marca d'agua e pequena, curta E encostada numa borda.
@@ -243,7 +244,7 @@ function hookScore(group: Group, region: TextRegion, relativeHeight: number, fra
   let score = 0;
   const text = group.displayText;
   const words = group.normalized.split(" ").filter(Boolean);
-  const persistence = new Set(group.lines.map((l) => l.timestampSeconds)).size;
+  const persistence = new Set(group.lines.map((l: any) => l.timestampSeconds)).size;
   const avgConfidence = group.lines.reduce((a, l) => a + l.confidence, 0) / group.lines.length;
 
   if (region === "top") {
@@ -288,7 +289,7 @@ function hookScore(group: Group, region: TextRegion, relativeHeight: number, fra
   }
 
   // Um gancho raramente aparece so no fim do video.
-  const firstSeen = Math.min(...group.lines.map((l) => l.timestampSeconds));
+  const firstSeen = Math.min(...group.lines.map((l: any) => l.timestampSeconds));
   if (firstSeen <= 3) {
     score += 1;
     reasons.push(`Surge aos ${firstSeen.toFixed(1)}s.`);
@@ -325,7 +326,7 @@ export function classifyDetectedText(lines: OcrLine[], frameCount: number): Clas
     const first = group.lines.reduce((a, b) => (a.timestampSeconds <= b.timestampSeconds ? a : b));
     const region = regionOf(first);
     const relativeHeight =
-      Math.max(...group.lines.map((l) => l.height)) / Math.max(1, first.frameHeight);
+      Math.max(...group.lines.map((l: any) => l.height)) / Math.max(1, first.frameHeight);
     const { kind, reasons: kindReasons } = classifyKind(group, region, relativeHeight, frameCount);
     const { score, reasons: scoreReasons } = hookScore(group, region, relativeHeight, frameCount);
 
@@ -336,7 +337,7 @@ export function classifyDetectedText(lines: OcrLine[], frameCount: number): Clas
       type: kind,
       ocrConfidence: round2(group.lines.reduce((a, l) => a + l.confidence, 0) / group.lines.length),
       relativeHeight: round2(relativeHeight),
-      persistence: new Set(group.lines.map((l) => l.timestampSeconds)).size,
+      persistence: new Set(group.lines.map((l: any) => l.timestampSeconds)).size,
       score: kind === "possible_hook" ? score : score - 4,
       reasons: [...kindReasons, ...scoreReasons],
       occurrences: group.lines.length,
@@ -355,8 +356,7 @@ export function classifyDetectedText(lines: OcrLine[], frameCount: number): Clas
   // queimada no video, lida num frame so. Sem esta exigencia, o campo "CTA
   // detectado" se enche de frases que parecem resultado e nao sao.
   const best =
-    candidates.find(
-      (c) => c.type === "possible_hook" && c.score >= 6 && (frameCount <= 1 || (c.persistence ?? 1) >= 2),
+    candidates.find((c: any) => c.type === "possible_hook" && c.score >= 6 && (frameCount <= 1 || (c.persistence ?? 1) >= 2),
     ) ?? null;
   const existingCta: ExistingCtaDetection | null = best
     ? {

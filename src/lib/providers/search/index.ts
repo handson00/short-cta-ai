@@ -27,7 +27,7 @@ class HttpSearchProvider implements SearchProvider {
 
   private allow(): boolean {
     const now = Date.now();
-    this.calls = this.calls.filter((t) => now - t < this.windowMs);
+    this.calls = this.calls.filter((t: any) => now - t < this.windowMs);
     if (this.calls.length >= this.maxPerWindow) return false;
     this.calls.push(now);
     return true;
@@ -58,7 +58,7 @@ class HttpSearchProvider implements SearchProvider {
           url: item.url ? String(item.url) : null,
           source: String(item.source ?? new URL(env.searchHttpEndpoint).hostname),
         }))
-        .filter((e) => e.title || e.snippet);
+        .filter((e: any) => e.title || e.snippet);
     } finally {
       clearTimeout(timer);
     }

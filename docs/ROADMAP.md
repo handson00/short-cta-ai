@@ -117,3 +117,40 @@ Só faz sentido começar depois da Fase 0.
    downloader)?
 3. Agora que o OCR funciona: manter a geração de CTA apoiada em OCR +
    transcrição, ou vale investir num provedor de visão (Fase 2.1)?
+
+---
+
+## Atualização 2026-09-21
+
+### Fase 0 — Desbloqueio (atualizado)
+
+| # | Item | Estado |
+| --- | --- | --- |
+| 0.1 | Colocar o projeto em git e commitar o estado atual | ✅ 2026-09-18 |
+| 0.2 | Resolver o OCR no Windows | ✅ 2026-09-18 — era CRLF no parser do TSV |
+| 0.3 | Instalar `faster-whisper` e ligar a transcrição | ❌ **ainda é o gargalo** |
+| 0.4 | Testar o GhostCLI contra a API real, não o mock | ❌ |
+| 0.5 | Reanalisar os 79 vídeos já importados | ❌ foram processados com o OCR quebrado |
+| 0.6 | **Corrigir crash do painel lateral** | ✅ 2026-09-21 — `PostComment` movido para `viewTypes.ts`; `ErrorBoundary` criado |
+
+### Regra crítica adicionada
+
+**Nunca importe tipos de `repo.ts` ou `db.ts` em componentes `"use client"`.**
+Mesmo com `import type`, o bundler do Next.js pode puxar o módulo inteiro
+(incluindo `better-sqlite3`) para o bundle do cliente. Tipos que atravessam
+a fronteira servidor/cliente devem viver em `src/lib/viewTypes.ts`.
+
+### Arquivos novos nesta sessão
+
+| Arquivo | Função |
+| --- | --- |
+| `src/components/ErrorBoundary.tsx` | Captura erros de renderização React e exibe mensagem em vez de crashar |
+
+### Arquivos alterados nesta sessão
+
+| Arquivo | O que mudou |
+| --- | --- |
+| `src/lib/viewTypes.ts` | Adicionado tipo `PostComment` (antes vinha de `repo.ts`) |
+| `src/components/CommentsPanel.tsx` | Import de `PostComment` agora vem de `viewTypes` |
+| `src/components/PreviewPanel.tsx` | Removido error boundary inline problemático; `CommentsPanel` envolto em `ErrorBoundary` |
+| `src/components/Library.tsx` | `PreviewPanel` envolto em `ErrorBoundary` |

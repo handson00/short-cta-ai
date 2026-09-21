@@ -43,7 +43,7 @@ export default function UsagePanel() {
   if (!data) return <p className="hint">Carregando uso…</p>;
 
   const totalRequests = data.usage.reduce((a, r) => a + r.total, 0);
-  const failures = data.usage.filter((r) => r.status === "error").reduce((a, r) => a + r.total, 0);
+  const failures = data.usage.filter((r: any) => r.status === "error").reduce((a, r) => a + r.total, 0);
 
   return (
     <div className="space-y-5">
