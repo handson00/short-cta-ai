@@ -3,6 +3,7 @@ import path from "node:path";
 import { env } from "../env";
 import { getSettings } from "../settings";
 import { AiError, aiConfigured, aiProvider } from "../providers/ai";
+import { detailedMessage } from "../providers/ai/errors";
 import { transcriptionProvider } from "../providers/transcription";
 import { visionProvider } from "../providers/vision";
 import { extractAudio, extractFrames, extractThumbnail, probe } from "../media/ffmpeg";
@@ -81,7 +82,10 @@ export async function runJob(job: ClaimedJob): Promise<void> {
     const aiErr = err instanceof AiError ? err : null;
     const code = aiErr?.code ?? (err as { code?: string }).code ?? "pipeline_error";
     const retryable = aiErr ? aiErr.retryable : !(err as { fatal?: boolean }).fatal;
-    const message = (err as Error).message ?? "Falha desconhecida";
+    // Para erro de IA, inclui o corpo que o servico devolveu (sem cabecalhos
+    // nem credencial): e o que diferencia, por exemplo, "chave sem escopo de
+    // API" de "IP fora da lista liberada" atras de um 403 generico.
+    const message = aiErr ? detailedMessage(aiErr) : ((err as Error).message ?? "Falha desconhecida");
 
     if (retryable && job.attempts < job.maxAttempts) {
       // Devolve a fila: a proxima tentativa recomeca do inicio do pipeline.

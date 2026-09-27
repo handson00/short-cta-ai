@@ -3,14 +3,20 @@
 import CopyButton from "@/components/CopyButton";
 import { parsePostUrl } from "@/lib/postUrl";
 import type { PostComment } from "@/lib/viewTypes";
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+
+interface VideoHashtags {
+  doVideo: string[];
+  nosComentarios: Array<{ tag: string; vezes: number }>;
+  todas: string[];
+}
 
 interface CommentsPanelProps {
   postUrl?: string | null;
   compact?: boolean;
   videoId: string;
   comments?: PostComment[] | null;
-  capturedAt?: Date | null;
+  capturedAt?: Date | string | null;
   onCommentsCaptured?: () => void;
 }
 
@@ -30,7 +36,39 @@ export function urlDeCaptura(rawUrl?: string | null): string | null {
   }
 }
 
-export default function CommentsPanel({ videoId, comments, capturedAt, onCommentsCaptured }: CommentsPanelProps) {
+export default function CommentsPanel({ videoId, comments: propComments, capturedAt: propCapturedAt, onCommentsCaptured }: CommentsPanelProps) {
+  // Busca comentários internamente quando não são passados via props (página de detalhes).
+  const [fetchedComments, setFetchedComments] = useState<PostComment[] | null | undefined>(undefined);
+  const [fetchedCapturedAt, setFetchedCapturedAt] = useState<string | null>(null);
+  const [hashtags, setHashtags] = useState<VideoHashtags | null>(null);
+  const [gerandoHashtags, setGerandoHashtags] = useState(false);
+  const [hashtagsGeradas, setHashtagsGeradas] = useState<string[] | null>(null);
+  const [erroHashtags, setErroHashtags] = useState<string | null>(null);
+
+  const loadComments = useCallback(async () => {
+    if (propComments !== undefined) return;
+    try {
+      const res = await fetch(`/api/videos/${videoId}/comments`, { cache: "no-store" });
+      if (res.ok) {
+        const data = await res.json();
+        setFetchedComments(data.comments ?? []);
+        setFetchedCapturedAt(data.capturedAt ?? null);
+        setHashtags(data.hashtags ?? null);
+      } else {
+        setFetchedComments(null);
+      }
+    } catch {
+      setFetchedComments(null);
+    }
+  }, [videoId, propComments]);
+
+  useEffect(() => {
+    void loadComments();
+  }, [loadComments]);
+
+  const comments = propComments !== undefined ? propComments : fetchedComments;
+  const capturedAt = propCapturedAt !== undefined ? propCapturedAt : fetchedCapturedAt;
+
   const [gerando, setGerando] = useState(false);
   const [otimizando, setOtimizando] = useState(false);
   const [erroCta, setErroCta] = useState<string | null>(null);
@@ -86,6 +124,30 @@ export default function CommentsPanel({ videoId, comments, capturedAt, onComment
       setErroCta(msg);
     } finally {
       setGerando(false);
+      void loadComments();
+      onCommentsCaptured?.();
+    }
+  }
+
+  async function gerarHashtagsVirais() {
+    setGerandoHashtags(true);
+    setErroHashtags(null);
+    setHashtagsGeradas(null);
+    try {
+      const res = await fetch(`/api/videos/${videoId}/hashtags-virais`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { error?: string }).error || "Erro ao gerar hashtags");
+      }
+      const data = (await res.json()) as { hashtags: string[] };
+      setHashtagsGeradas(data.hashtags ?? []);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Erro desconhecido";
+      setErroHashtags(msg);
+    } finally {
+      setGerandoHashtags(false);
     }
   }
 
@@ -108,12 +170,18 @@ export default function CommentsPanel({ videoId, comments, capturedAt, onComment
       setErroCta(msg);
     } finally {
       setOtimizando(false);
+      void loadComments();
+      onCommentsCaptured?.();
     }
   }
 
   return (
     <div className="rounded-lg border border-ink-700/30 bg-ink-900/20 p-3">
       <h3 className="text-xs font-medium uppercase tracking-wide text-ink-300">Comentarios</h3>
+
+      {comments === undefined && (
+        <p className="mt-2 text-[11px] text-ink-400">Carregando comentários…</p>
+      )}
 
       {comments === null && (
         <p className="mt-2 text-[11px] text-ink-400">
@@ -123,7 +191,7 @@ export default function CommentsPanel({ videoId, comments, capturedAt, onComment
         </p>
       )}
 
-      {comments !== null && comments.length > 0 && (
+      {Array.isArray(comments) && comments.length > 0 && (
         <div className="space-y-3 border-t border-white/10 pt-3">
           {/* Botões de ação */}
           <div className="flex flex-col gap-1">
@@ -236,10 +304,68 @@ export default function CommentsPanel({ videoId, comments, capturedAt, onComment
             </div>
           )}
 
+          {/* Hashtags capturadas */}
+          {hashtags && (hashtags.doVideo.length > 0 || hashtags.nosComentarios.length > 0) && (
+            <div className="space-y-2 rounded border border-ink-700 bg-ink-900/30 p-2">
+              <p className="text-[11px] font-semibold text-ink-300">Hashtags capturadas</p>
+
+              {hashtags.doVideo.length > 0 && (
+                <div>
+                  <p className="text-[9px] text-ink-400 mb-1">Do vídeo:</p>
+                  <div className="flex flex-wrap gap-1">
+                    {hashtags.doVideo.map((tag) => (
+                      <span key={tag} className="rounded bg-accent/10 px-1.5 py-0.5 text-[10px] text-accent">
+                        #{tag.replace(/^#/, "")}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {hashtags.nosComentarios.length > 0 && (
+                <div>
+                  <p className="text-[9px] text-ink-400 mb-1">Mais citadas nos comentários:</p>
+                  <div className="flex flex-wrap gap-1">
+                    {hashtags.nosComentarios.slice(0, 10).map((h) => (
+                      <span key={h.tag} className="rounded bg-ink-800 px-1.5 py-0.5 text-[10px] text-ink-300">
+                        #{h.tag.replace(/^#/, "")} <span className="text-ink-500">({h.vezes})</span>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <button
+                type="button"
+                className="btn-quiet mt-1 px-2 py-1 text-[11px]"
+                disabled={gerandoHashtags || gerando || otimizando}
+                onClick={() => void gerarHashtagsVirais()}
+              >
+                {gerandoHashtags ? "Gerando hashtags virais…" : "Gerar hashtags com alto potencial viral"}
+              </button>
+
+              {erroHashtags && <p className="hint text-amber-400 text-[11px]">{erroHashtags}</p>}
+
+              {hashtagsGeradas && hashtagsGeradas.length > 0 && (
+                <div className="mt-2 space-y-1 rounded border border-accent/30 bg-accent/5 p-2">
+                  <p className="text-[11px] font-semibold text-accent">Hashtags virais sugeridas pela IA</p>
+                  <div className="flex flex-wrap gap-1">
+                    {hashtagsGeradas.map((tag) => (
+                      <span key={tag} className="rounded bg-accent/15 px-1.5 py-0.5 text-[10px] font-medium text-accent">
+                        #{tag.replace(/^#/, "")}
+                      </span>
+                    ))}
+                  </div>
+                  <CopyButton text={hashtagsGeradas.map((t) => t.startsWith("#") ? t : `#${t}`).join(" ")} compact />
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Info de comentários */}
-          {comments && (
+          {Array.isArray(comments) && (
             <p className="text-[9px] text-ink-400 border-t border-white/10 pt-1">
-              {comments.length} comentário(s) capturado(s) {capturedAt && `em ${new Intl.DateTimeFormat("pt-BR").format(capturedAt)}`}
+              {comments.length} comentário(s) capturado(s) {capturedAt && `em ${String(capturedAt).slice(0, 16).replace("T", " ")}`}
             </p>
           )}
         </div>

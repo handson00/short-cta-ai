@@ -1,10 +1,10 @@
 import type { AIProvider, CtaOptions, CtaResult, SceneAnalysis, SceneContext } from "../../types";
 import type { AppSettings } from "../../settings";
-import { analysisSystemPrompt, buildAnalysisUserMessage, buildCommentCtaUserMessage, buildGenerationUserMessage, buildPublishKitUserMessage, commentCtaSystemPrompt, publishKitSystemPrompt, generationSystemPrompt, optimizedCommentCtaSystemPrompt, buildOptimizedCommentCtaUserMessage, PROMPT_VERSION } from "../../prompts";
+import { analysisSystemPrompt, buildAnalysisUserMessage, buildCommentCtaUserMessage, buildGenerationUserMessage, buildPublishKitUserMessage, buildViralHashtagsUserMessage, commentCtaSystemPrompt, publishKitSystemPrompt, generationSystemPrompt, optimizedCommentCtaSystemPrompt, buildOptimizedCommentCtaUserMessage, viralHashtagsSystemPrompt, PROMPT_VERSION } from "../../prompts";
 import { extractJson, InvalidModelOutput, parseSceneAnalysis, validateCommentCtaResult, validateCtaResult, validatePublishKit, validateOptimizedCommentCtaResult, type CommentCtaResult, type PublishKitResult, type ValidatedCtaResult, type OptimizedCommentCtaResult } from "../../pipeline/validation";
 import type { CommentInsights } from "../../pipeline/commentInsights";
 import { chatCompletion, type ChatMessage, type ClientConfig, type ToolDefinition } from "./client";
-import { AiError } from "./errors";
+import { AiError, detailedMessage } from "./errors";
 import { logAiRequest } from "../../aiLog";
 import { searchProvider } from "../search";
 
@@ -150,6 +150,41 @@ export class GhostCliProvider implements AIProvider {
       (raw) => validateOptimizedCommentCtaResult(extractJson(raw)),
     );
   }
+
+  async generateViralHashtags(
+    insights: CommentInsights | null,
+    analysis: SceneAnalysis | null,
+    capturedHashtags: { doVideo: string[]; nosComentarios: Array<{ tag: string; vezes: number }>; todas: string[] },
+    count: number,
+  ): Promise<{ hashtags: string[]; reasoning: string | null }> {
+    const model = this.ctx.settings.ghostcli.generationModel;
+    const messages: ChatMessage[] = [
+      { role: "system", content: viralHashtagsSystemPrompt(count) },
+      { role: "user", content: buildViralHashtagsUserMessage(insights, analysis, capturedHashtags) },
+    ];
+
+    const content = await this.converse("viral_hashtags", model, messages, false);
+    const parsed = extractJson(content) as { hashtags?: unknown[]; reasoning?: unknown } | null;
+    const hashtags = Array.isArray(parsed?.hashtags) ? parsed.hashtags.filter((h: unknown): h is string => typeof h === "string") : [];
+    const reasoning = typeof parsed?.reasoning === "string" ? parsed.reasoning : null;
+
+    if (hashtags.length === 0) {
+      throw new AiError("invalid_output", "O modelo não retornou nenhuma hashtag válida.");
+    }
+
+    logAiRequest({
+      videoId: this.ctx.videoId ?? null,
+      operation: "viral_hashtags",
+      model,
+      promptTokens: null,
+      completionTokens: null,
+      durationMs: 0,
+      status: "ok",
+      errorMessage: null,
+    });
+
+    return { hashtags, reasoning };
+  }
   /** Roda a conversa, resolvendo chamadas de ferramenta no servidor. */
   private async converse(
     operation: string,
@@ -246,7 +281,7 @@ export class GhostCliProvider implements AIProvider {
         status: "error",
         httpStatus: aiErr.httpStatus ?? null,
         errorCode: aiErr.code,
-        errorMessage: aiErr.message,
+        errorMessage: detailedMessage(aiErr),
         promptVersion: PROMPT_VERSION,
       });
       throw aiErr;
@@ -357,7 +392,7 @@ export async function testConnection(ctx: ProviderContext): Promise<ConnectionTe
     return {
       ok: false,
       model,
-      message: aiErr.message,
+      message: detailedMessage(aiErr),
       durationMs: null,
       httpStatus: aiErr.httpStatus ?? null,
       errorCode: aiErr.code,

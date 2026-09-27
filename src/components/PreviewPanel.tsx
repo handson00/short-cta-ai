@@ -32,7 +32,20 @@ export default function PreviewPanel({ videoSummary, onChanged, onClose }: Props
 
   const loadDetail = useCallback(async (id: string) => {
     const res = await fetch(`/api/videos/${id}`, { cache: "no-store" });
-    if (res.ok) setDetail((await res.json()) as VideoDetail);
+    if (res.ok) {
+      const data = (await res.json()) as VideoDetail;
+      // Sanitiza campos críticos para evitar erros de renderização com dados incompletos
+      setDetail({
+        ...data,
+        frames: Array.isArray(data.frames) ? data.frames : [],
+        suggestions: Array.isArray(data.suggestions) ? data.suggestions : [],
+        suggestionsByStyle: Array.isArray(data.suggestionsByStyle) ? data.suggestionsByStyle : [],
+        visibleText: Array.isArray(data.visibleText) ? data.visibleText : [],
+        limitations: Array.isArray(data.limitations) ? data.limitations : [],
+        selection: data.selection ?? { chosenCtaId: null, editedText: null, favorite: false, updatedAt: null },
+        source: data.source ?? { folder: null, username: null, videoDate: null, platform: null, platformVideoId: null, originalUrl: null, embedUrl: null, identified: false },
+      });
+    }
   }, []);
 
   useEffect(() => {
@@ -137,7 +150,7 @@ export default function PreviewPanel({ videoSummary, onChanged, onClose }: Props
             <div className="mt-1 space-y-0.5 text-[10px] text-ink-400">
               <p>{formatDuration(video.durationSeconds)} · {video.aspectRatio}</p>
               <p>
-                {(video.bytes / 1024 / 1024).toFixed(2)} MB · Criado em {new Date(video.createdAt).toLocaleString("pt-BR")}
+                {(video.bytes / 1024 / 1024).toFixed(2)} MB · Criado em {video.createdAt ? video.createdAt.slice(0, 16).replace("T", " ") : "—"}
               </p>
             </div>
           </div>
@@ -145,16 +158,16 @@ export default function PreviewPanel({ videoSummary, onChanged, onClose }: Props
           {(video.source?.username || video.source?.originalUrl) && (
             <div className="rounded border border-ink-700 bg-ink-850/60 p-2 space-y-1">
               <p className="text-[10px] uppercase tracking-wide text-ink-400">
-                Origem{video.source.platform ? ` ${PLATFORM_LABEL[video.source.platform] ?? video.source.platform}` : ""}
+                Origem{video.source?.platform ? ` ${PLATFORM_LABEL[video.source.platform] ?? video.source.platform}` : ""}
               </p>
               <div className="space-y-0.5 text-[10px]">
-                {video.source.username && <p>Usuário: @{video.source.username}</p>}
-                {video.source.videoDate && <p>Data: {formatDateBR(video.source.videoDate)}</p>}
-                {video.source.platformVideoId && (
+                {video.source?.username && <p>Usuário: @{video.source.username}</p>}
+                {video.source?.videoDate && <p>Data: {formatDateBR(video.source.videoDate)}</p>}
+                {video.source?.platformVideoId && (
                   <p className="font-mono">ID: {video.source.platformVideoId}</p>
                 )}
 
-                {video.source.originalUrl ? (
+                {video.source?.originalUrl ? (
                   <a
                     href={video.source.originalUrl}
                     target="_blank"
@@ -237,7 +250,7 @@ export default function PreviewPanel({ videoSummary, onChanged, onClose }: Props
                     <div className="rounded bg-ink-900/60 p-1.5 text-[10px] space-y-0.5">
                       {capture.authorName && <p>Autor: {capture.authorName}</p>}
                       {capture.title && <p className="text-ink-300">{capture.title}</p>}
-                      <p className="text-ink-600">Capturado em {new Date(capture.capturedAt).toLocaleString("pt-BR")}</p>
+                      <p className="text-ink-600">Capturado em {capture.capturedAt ? capture.capturedAt.slice(0, 16).replace("T", " ") : "—"}</p>
                     </div>
                   )}
                   {captureError && <p className="text-[10px] text-amber-300">{captureError}</p>}

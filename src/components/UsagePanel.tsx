@@ -110,7 +110,7 @@ export default function UsagePanel() {
                 <span className="text-ink-300">{row.operation}</span>
                 <span className="ml-2 text-red-300">{row.error_code}</span>
                 <p className="mt-0.5 text-ink-400">{row.error_message}</p>
-                <p className="text-ink-600">{new Date(row.created_at).toLocaleString("pt-BR")}</p>
+                <p className="text-ink-600">{row.created_at ? String(row.created_at).slice(0, 16).replace("T", " ") : "—"}</p>
               </li>
             ))}
           </ul>

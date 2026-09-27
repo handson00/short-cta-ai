@@ -12,5 +12,6 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   return json({
     comments: repo.getComments(id),
     capturedAt: repo.getCommentsCapturedAt(id),
+    hashtags: repo.getVideoHashtags(id),
   });
 }

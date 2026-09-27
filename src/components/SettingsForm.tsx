@@ -445,6 +445,16 @@ export default function SettingsForm() {
         </div>
       </section>
 
+      <section className="card space-y-4 p-4">
+        <h2 className="text-sm font-medium">Integração com extensão de comentários</h2>
+        <p className="hint">
+          Token usado pela extensão do navegador para enviar comentários capturados. A extensão não tem sessão do app,
+          então este token é a única credencial aceita pelo endpoint de ingestão.
+        </p>
+
+        <IngestTokenManager busy={busy} setBusy={setBusy} setError={setError} />
+      </section>
+
       <section className="card space-y-2 p-4 text-sm">
         <h2 className="text-sm font-medium">Provedores locais</h2>
         <ProviderRow label="Transcrição" {...status.providers.transcription} />
@@ -490,6 +500,97 @@ function ProviderRow({
         {name}
       </span>
       {detail && <span className="text-ink-500">{detail}</span>}
+    </div>
+  );
+}
+
+function IngestTokenManager({
+  busy,
+  setBusy,
+  setError,
+}: {
+  busy: string | null;
+  setBusy: (v: string | null) => void;
+  setError: (v: string | null) => void;
+}) {
+  const [token, setToken] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/settings/comments-token", { cache: "no-store" });
+        if (!res.ok) return;
+        const data = (await res.json()) as { token?: string | null };
+        if (!cancelled && data.token) setToken(data.token);
+      } catch {
+        /* ignora — campo fica vazio */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function gerar() {
+    setBusy("genIngestToken");
+    setError(null);
+    setCopied(false);
+    try {
+      const res = await fetch("/api/settings/comments-token", { method: "POST" });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error ?? "Falha ao gerar token.");
+      }
+      const data = (await res.json()) as { token?: string };
+      if (data.token) setToken(data.token);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function copiar() {
+    if (!token) return;
+    try {
+      await navigator.clipboard.writeText(token);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      /* fallback não necessário em contexto local */
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+        <input
+          type="text"
+          readOnly
+          className="field font-mono text-xs"
+          value={token ?? ""}
+          placeholder={token ? "" : "Nenhum token configurado"}
+        />
+        <button
+          className="btn-ghost shrink-0"
+          disabled={!token || copied}
+          onClick={() => void copiar()}
+        >
+          {copied ? "Copiado!" : "Copiar"}
+        </button>
+        <button
+          className="btn-primary shrink-0"
+          disabled={busy === "genIngestToken"}
+          onClick={() => void gerar()}
+        >
+          {busy === "genIngestToken" ? "Gerando…" : token ? "Gerar novo token" : "Gerar token"}
+        </button>
+      </div>
+      <p className="hint">
+        O token é gravado no .env.local. Após gerar um novo token, reinicie o servidor para que ele passe a ser aceito pelo endpoint de ingestão.
+      </p>
     </div>
   );
 }

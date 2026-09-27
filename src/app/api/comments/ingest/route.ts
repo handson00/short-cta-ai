@@ -28,9 +28,16 @@ const Comentario = z.object({
   publishedLabel: z.string().max(60).nullish(),
 });
 
+const Hashtags = z.object({
+  doVideo: z.array(z.string()).default([]),
+  nosComentarios: z.array(z.object({ tag: z.string(), vezes: z.number() })).default([]),
+  todas: z.array(z.string()).default([]),
+}).optional();
+
 const Payload = z.object({
   postUrl: z.string().min(5).max(2048),
   comments: z.array(Comentario).max(MAX_COMENTARIOS),
+  hashtags: Hashtags,
 });
 
 function corsHeaders(): Record<string, string> {
@@ -78,8 +85,13 @@ export async function POST(request: Request) {
 
   const parsed = Payload.safeParse(corpo);
   if (!parsed.success) {
+    const problemas = parsed.error.issues.slice(0, 8).map((i: any) => ({
+      caminho: i.path.join("."),
+      mensagem: i.message,
+      recebido: i.received,
+    }));
     return json(
-      { error: "Formato inesperado.", detalhes: parsed.error.issues.slice(0, 5) },
+      { error: "Formato inesperado.", problemas },
       { status: 422, headers: corsHeaders() },
     );
   }
@@ -106,5 +118,11 @@ export async function POST(request: Request) {
   }
 
   const gravados = repo.replaceComments(video.id, ref.platform, parsed.data.comments);
+
+  // Salvar hashtags se fornecidas
+  if (parsed.data.hashtags) {
+    repo.saveVideoHashtags(video.id, parsed.data.hashtags);
+  }
+
   return json({ ok: true, videoId: video.id, gravados }, { headers: corsHeaders() });
 }

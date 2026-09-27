@@ -58,6 +58,19 @@ export function friendlyMessage(code: AiErrorCode, httpStatus?: number): string 
   }
 }
 
+/**
+ * Mensagem para quem vai DEPURAR o problema (usuario nas Configuracoes, log
+ * de uso) — a friendlyMessage() sozinha so diz a categoria do erro (403,
+ * 401...); o detalhe (o corpo que o servico devolveu, ja sem cabecalhos nem
+ * credencial - ver safeErrorDetail() no client) e o que de fato diferencia
+ * "chave sem escopo de API" de "IP fora da lista liberada", e ficava sendo
+ * descartado antes de chegar a interface.
+ */
+export function detailedMessage(err: AiError): string {
+  if (err.details.length === 0) return err.message;
+  return `${err.message} Resposta do serviço: ${err.details.join(" | ")}`;
+}
+
 export function classifyHttpStatus(status: number): AiErrorCode {
   if (status === 401) return "auth_error";
   if (status === 402) return "payment_required";

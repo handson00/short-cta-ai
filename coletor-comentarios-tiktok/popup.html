@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Coletor de Comentarios TikTok</title>
+<link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <h1>Comentarios do TikTok</h1>
+    <p id="alvo" class="alvo">Verificando a aba...</p>
+  </header>
+
+  <section class="opcoes">
+    <div class="linha">
+      <span>Maximo de comentarios</span>
+      <input id="limite" type="number" min="1" max="5000" step="10" value="100">
+    </div>
+    <div class="presets" id="presets">
+      <button type="button" data-valor="20">20</button>
+      <button type="button" data-valor="50">50</button>
+      <button type="button" data-valor="100">100</button>
+      <button type="button" data-valor="300">300</button>
+      <button type="button" data-valor="5000">Tudo</button>
+    </div>
+    <label class="linha check">
+      <input id="respostas" type="checkbox" checked>
+      <span>Incluir as respostas de cada comentario</span>
+    </label>
+    <label class="linha" id="linhaMaxResp">
+      <span>Respostas por comentario</span>
+      <input id="maxRespostas" type="number" min="1" max="200" step="5" value="20">
+    </label>
+    <label class="linha check">
+      <input id="autoCaptura" type="checkbox" checked>
+      <span>Capturar e enviar automaticamente ao abrir o vídeo</span>
+    </label>
+  </section>
+
+  <button id="capturar" class="primario">Capturar comentarios</button>
+  <button id="parar" class="parar oculto">Parar e usar o que ja veio</button>
+
+  <p id="status" class="status"></p>
+
+  <section id="resultado" class="resultado oculto">
+    <div class="numeros">
+      <div><strong id="nComentarios">0</strong><span>comentarios</span></div>
+      <div><strong id="nRespostas">0</strong><span>respostas</span></div>
+      <div><strong id="nHashtags">0</strong><span>hashtags</span></div>
+    </div>
+    <div id="tags" class="tags"></div>
+    <div class="botoes">
+      <button id="copiarJson" class="secundario">Copiar JSON</button>
+      <button id="copiarCsv" class="secundario">Copiar CSV</button>
+      <button id="baixar" class="secundario">Baixar JSON</button>
+      <button id="enviarShortCta" class="primario">Enviar para Short CTA AI</button>
+    </div>
+  </section>
+
+  <section class="opcoes" style="margin-top:8px;border-top:1px solid rgba(255,255,255,0.08);padding-top:8px;">
+    <div class="linha">
+      <span>URL do Short CTA AI</span>
+      <input id="shortCtaUrl" type="text" placeholder="http://127.0.0.1:3000" value="http://127.0.0.1:3000">
+    </div>
+    <div class="linha">
+      <span>Token de ingestão</span>
+      <input id="shortCtaToken" type="password" placeholder="COMMENTS_INGEST_TOKEN">
+    </div>
+    <div class="botoes" style="margin-top:6px;">
+      <button id="salvarTestarToken" class="secundario">Salvar e Testar Token</button>
+      <button id="capturarTodos" class="primario" style="margin-top:4px;">Capturar Comentários de Todos os Vídeos</button>
+    </div>
+  </section>
+
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -67,7 +67,7 @@ describe("mensagem de evidências", () => {
 describe("prompts do sistema", () => {
   it("o prompt central pede o contrato de saída", () => {
     const prompt = analysisSystemPrompt();
-    expect(prompt).toContain("editor especializado em ganchos");
+    expect(prompt).toContain("especialista em criação de CTAs virais");
     expect(prompt).toContain("CONTRATO DE SAÍDA");
     expect(prompt).toContain("not_identified_safely");
   });

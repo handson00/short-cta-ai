@@ -940,6 +940,69 @@ export function getCommentsCapturedAt(videoId: string): string | null {
   return row?.captured_at ?? null;
 }
 
+/**
+ * Salva as hashtags capturadas pela extensão para uso na geração de CTAs virais.
+ * Substitui quaisquer hashtags anteriores do mesmo vídeo (mesma lógica dos comentários).
+ */
+export function saveVideoHashtags(
+  videoId: string,
+  hashtags: { doVideo?: string[]; nosComentarios?: Array<{ tag: string; vezes: number }>; todas?: string[] },
+): void {
+  const agora = nowIso();
+
+  // Garante que a tabela existe ANTES de preparar o statement — o SQLite falha
+  // ao preparar INSERT contra tabela inexistente, causando HTTP 500 silencioso.
+  db().exec(`
+    CREATE TABLE IF NOT EXISTS video_hashtags (
+      video_id TEXT PRIMARY KEY REFERENCES videos(id) ON DELETE CASCADE,
+      do_video_json TEXT NOT NULL DEFAULT '[]',
+      nos_comentarios_json TEXT NOT NULL DEFAULT '[]',
+      todas_json TEXT NOT NULL DEFAULT '[]',
+      captured_at TEXT NOT NULL
+    )
+  `);
+
+  const upsert = db().prepare(
+    `INSERT INTO video_hashtags (video_id, do_video_json, nos_comentarios_json, todas_json, captured_at)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(video_id) DO UPDATE SET
+       do_video_json = excluded.do_video_json,
+       nos_comentarios_json = excluded.nos_comentarios_json,
+       todas_json = excluded.todas_json,
+       captured_at = excluded.captured_at`,
+  );
+
+  upsert.run(
+    videoId,
+    JSON.stringify(hashtags.doVideo ?? []),
+    JSON.stringify(hashtags.nosComentarios ?? []),
+    JSON.stringify(hashtags.todas ?? []),
+    agora,
+  );
+}
+
+export function getVideoHashtags(videoId: string): {
+  doVideo: string[];
+  nosComentarios: Array<{ tag: string; vezes: number }>;
+  todas: string[];
+} | null {
+  const row = db()
+    .prepare("SELECT do_video_json, nos_comentarios_json, todas_json FROM video_hashtags WHERE video_id = ?")
+    .get(videoId) as { do_video_json: string; nos_comentarios_json: string; todas_json: string } | undefined;
+
+  if (!row) return null;
+
+  const parseJson = <T>(s: string, fallback: T): T => {
+    try { return JSON.parse(s) as T; } catch { return fallback; }
+  };
+
+  return {
+    doVideo: parseJson<string[]>(row.do_video_json, []),
+    nosComentarios: parseJson<Array<{ tag: string; vezes: number }>>(row.nos_comentarios_json, []),
+    todas: parseJson<string[]>(row.todas_json, []),
+  };
+}
+
 /** Acha o video pelo codigo do post, do jeito que a extensao conhece o video. */
 export function findVideoByPlatformId(platform: string, platformVideoId: string): { id: string } | null {
   const row = db()

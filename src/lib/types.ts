@@ -224,6 +224,13 @@ export interface AIProvider {
     analysis: SceneAnalysis | null,
     existingCta: string | null,
   ): Promise<import("./pipeline/validation").PublishKitResult>;
+  /** Hashtags com alto potencial viral baseadas em comentários e hashtags capturadas. */
+  generateViralHashtags(
+    insights: import("./pipeline/commentInsights").CommentInsights | null,
+    analysis: SceneAnalysis | null,
+    capturedHashtags: { doVideo: string[]; nosComentarios: Array<{ tag: string; vezes: number }>; todas: string[] },
+    count: number,
+  ): Promise<{ hashtags: string[]; reasoning: string | null }>;
 }
 
 export interface TranscriptionProvider {
