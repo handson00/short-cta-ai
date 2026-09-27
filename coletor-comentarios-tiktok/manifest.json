@@ -3,7 +3,7 @@
   "name": "Coletor de Comentarios TikTok",
   "version": "1.0.0",
   "description": "Captura os comentarios, as respostas e as hashtags do video do TikTok aberto na aba atual.",
-  "permissions": ["activeTab", "scripting", "storage"],
+  "permissions": ["activeTab", "scripting", "storage", "tabs"],
   "host_permissions": ["https://www.tiktok.com/*", "http://localhost:*/*", "http://127.0.0.1:*/*"],
   "background": {
     "service_worker": "background.js"

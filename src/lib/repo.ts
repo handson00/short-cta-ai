@@ -1141,3 +1141,124 @@ export function getSourceCapture(videoId: string): SourceCapture | null {
     capturedAt: row.captured_at,
   };
 }
+
+// ------------------------- Fila de Captura em Lote --------------------------
+
+/**
+ * Garante que a tabela capture_queue existe. Chamada lazy na primeira operação.
+ */
+let captureQueueInitialized = false;
+function ensureCaptureQueue(): void {
+  if (captureQueueInitialized) return;
+  db().exec(`
+    CREATE TABLE IF NOT EXISTS capture_queue (
+      id TEXT PRIMARY KEY,
+      video_id TEXT NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+      url TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      attempts INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      completed_at TEXT
+    )
+  `);
+  db().exec(`CREATE INDEX IF NOT EXISTS idx_capture_queue_status ON capture_queue(status)`);
+  captureQueueInitialized = true;
+}
+
+export interface CaptureQueueItem {
+  id: string;
+  videoId: string;
+  url: string;
+  status: "pending" | "processing" | "done" | "error";
+  attempts: number;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+}
+
+/** Adiciona vídeos à fila de captura. Ignora duplicatas já pendentes. */
+export function addToCaptureQueue(items: Array<{ videoId: string; url: string }>): number {
+  ensureCaptureQueue();
+  const agora = nowIso();
+  let added = 0;
+  const insert = db().prepare(
+    `INSERT OR IGNORE INTO capture_queue (id, video_id, url, status, attempts, created_at, updated_at)
+     VALUES (?, ?, ?, 'pending', 0, ?, ?)`,
+  );
+  const tx = db().transaction(() => {
+    for (const item of items) {
+      const result = insert.run(newId("cq"), item.videoId, item.url, agora, agora);
+      if (result.changes > 0) added++;
+    }
+  });
+  tx();
+  return added;
+}
+
+/** Retorna os próximos itens pendentes para a extensão processar. */
+export function getPendingCaptures(limit: number = 5): CaptureQueueItem[] {
+  ensureCaptureQueue();
+  const rows = db()
+    .prepare(
+      `SELECT id, video_id, url, status, attempts, created_at, updated_at, completed_at
+       FROM capture_queue
+       WHERE status = 'pending'
+       ORDER BY created_at ASC
+       LIMIT ?`,
+    )
+    .all(limit) as Array<{
+    id: string;
+    video_id: string;
+    url: string;
+    status: string;
+    attempts: number;
+    created_at: string;
+    updated_at: string;
+    completed_at: string | null;
+  }>;
+  return rows.map((r) => ({
+    id: r.id,
+    videoId: r.video_id,
+    url: r.url,
+    status: r.status as CaptureQueueItem["status"],
+    attempts: r.attempts,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+    completedAt: r.completed_at,
+  }));
+}
+
+/** Marca um item da fila como concluído. */
+export function completeCaptureQueueItem(id: string): void {
+  ensureCaptureQueue();
+  const agora = nowIso();
+  db()
+    .prepare(`UPDATE capture_queue SET status = 'done', completed_at = ?, updated_at = ? WHERE id = ?`)
+    .run(agora, agora, id);
+}
+
+/** Marca um item da fila como erro (incrementa tentativas). */
+export function failCaptureQueueItem(id: string): void {
+  ensureCaptureQueue();
+  const agora = nowIso();
+  db()
+    .prepare(
+      `UPDATE capture_queue SET status = CASE WHEN attempts + 1 >= 3 THEN 'error' ELSE 'pending' END,
+        attempts = attempts + 1, updated_at = ? WHERE id = ?`,
+    )
+    .run(agora, id);
+}
+
+/** Retorna resumo da fila para exibição na UI. */
+export function captureQueueSummary(): { pending: number; processing: number; done: number; error: number } {
+  ensureCaptureQueue();
+  const rows = db()
+    .prepare(`SELECT status, COUNT(*) as n FROM capture_queue GROUP BY status`)
+    .all() as Array<{ status: string; n: number }>;
+  const summary = { pending: 0, processing: 0, done: 0, error: 0 };
+  for (const r of rows) {
+    if (r.status in summary) summary[r.status as keyof typeof summary] = r.n;
+  }
+  return summary;
+}

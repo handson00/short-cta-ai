@@ -36,6 +36,7 @@ export default function Library() {
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [bulkCapturing, setBulkCapturing] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const folderRef = useRef<HTMLInputElement>(null);
 
@@ -203,6 +204,48 @@ export default function Library() {
       await refresh();
     } finally {
       setBulkDeleting(false);
+    }
+  }
+
+  async function captureSelectedComments() {
+    const ids = [...selectedIds];
+    if (ids.length === 0) return;
+
+    // Filtra apenas vídeos que têm URL de origem (necessário para a extensão abrir)
+    const videosWithUrl = videos
+      .filter((v) => ids.includes(v.id) && v.source?.originalUrl)
+      .map((v) => ({ videoId: v.id, url: v.source!.originalUrl! }));
+
+    if (videosWithUrl.length === 0) {
+      alert("Nenhum dos vídeos selecionados possui URL de origem para captura.");
+      return;
+    }
+
+    const skipCount = ids.length - videosWithUrl.length;
+    if (skipCount > 0) {
+      window.alert(`${skipCount} vídeo(s) sem URL de origem serão ignorados.`);
+    }
+
+    setBulkCapturing(true);
+    try {
+      const res = await fetch("/api/extension/capture-queue", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ videos: videosWithUrl }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        added?: number;
+        total?: number;
+        error?: string;
+      };
+      if (!res.ok) {
+        alert(data.error ?? "Falha ao adicionar à fila de captura.");
+      } else {
+        alert(`${data.added ?? 0} vídeo(s) adicionado(s) à fila de captura. A extensão irá processá-los automaticamente.`);
+        setSelectedIds(new Set());
+      }
+    } finally {
+      setBulkCapturing(false);
     }
   }
 
@@ -386,9 +429,16 @@ export default function Library() {
                     Limpar seleção
                   </button>
                   <button
-                    className="btn px-2 py-0.5 text-[10px] bg-red-600/90 text-white hover:bg-red-600 ml-auto"
+                    className="btn px-2 py-0.5 text-[10px] bg-accent/90 text-white hover:bg-accent ml-auto"
+                    onClick={() => void captureSelectedComments()}
+                    disabled={bulkCapturing || bulkDeleting}
+                  >
+                    {bulkCapturing ? "Enfileirando…" : `Capturar comentários (${selectedIds.size})`}
+                  </button>
+                  <button
+                    className="btn px-2 py-0.5 text-[10px] bg-red-600/90 text-white hover:bg-red-600"
                     onClick={() => void deleteSelected()}
-                    disabled={bulkDeleting}
+                    disabled={bulkDeleting || bulkCapturing}
                   >
                     {bulkDeleting ? "Excluindo…" : `Excluir ${selectedIds.size}`}
                   </button>

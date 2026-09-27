@@ -161,3 +161,136 @@ async function garantirScript(tabId) {
     await new Promise((r) => setTimeout(r, 500));
   }
 }
+
+// ------------------------- Fila de Captura Automática -------------------------
+// Polling periódico consulta /api/extension/pending-captures e processa itens
+// usando a mesma lógica de executarCapturaEmLote já existente.
+
+const POLL_INTERVAL_MS = 30_000;
+let isPolling = false;
+
+async function pollCaptureQueue() {
+  if (isPolling) return;
+  // Precisa do token e da URL base; tenta obter do storage ou usa defaults
+  const data = await chrome.storage.local.get(['ingestToken', 'apiBase']);
+  const token = data.ingestToken || '';
+  const apiBase = (data.apiBase || 'http://127.0.0.1:3000').replace(/\/+$/, '');
+  if (!token) return; // Sem token configurado, não faz polling
+
+  isPolling = true;
+  try {
+    const res = await fetch(`${apiBase}/api/extension/pending-captures?limit=5`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return;
+    const { items } = await res.json();
+    if (!Array.isArray(items) || items.length === 0) return;
+
+    for (const item of items) {
+      let tabId = null;
+      try {
+        const tab = await chrome.tabs.create({ url: item.url, active: false });
+        tabId = tab.id;
+        await aguardarCarregamento(tabId);
+        await garantirScript(tabId);
+
+        const resposta = await chrome.tabs.sendMessage(tabId, {
+          tipo: 'coletar',
+          opcoes: { limite: 500, incluirRespostas: true, maxRespostas: 50 },
+        });
+
+        if (!resposta?.ok) throw new Error(resposta?.erro || 'Falha na captura');
+
+        // Monta comentários no formato esperado pelo ingest
+        const comments = [];
+        const dados = resposta.dados;
+        for (const c of dados.comentarios || []) {
+          const texto = (c.texto || '').trim();
+          if (texto) {
+            comments.push({
+              externalId: c.id || null,
+              parentExternalId: null,
+              author: c.autor || c.autorNome || null,
+              text: texto,
+              likeCount: typeof c.curtidas === 'number' ? c.curtidas : null,
+              publishedLabel: c.data || null,
+            });
+          }
+          for (const r of c.respostas || []) {
+            const textoResp = (r.texto || '').trim();
+            if (textoResp) {
+              comments.push({
+                externalId: r.id || null,
+                parentExternalId: c.id || null,
+                author: r.autor || r.autorNome || null,
+                text: textoResp,
+                likeCount: typeof r.curtidas === 'number' ? r.curtidas : null,
+                publishedLabel: r.data || null,
+              });
+            }
+          }
+        }
+
+        const hashtags = dados.hashtags || { doVideo: [], nosComentarios: [], todas: [] };
+        const CHUNK = 200;
+        for (let i = 0; i < comments.length; i += CHUNK) {
+          const fatia = comments.slice(i, i + CHUNK);
+          const payload = {
+            postUrl: item.url,
+            comments: fatia,
+            hashtags: i === 0 ? hashtags : { doVideo: [], nosComentarios: [], todas: [] },
+          };
+          const resIngest = await fetch(`${apiBase}/api/comments/ingest`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify(payload),
+          });
+          if (!resIngest.ok) {
+            const errBody = await resIngest.json().catch(() => null);
+            throw new Error(errBody?.error || `HTTP ${resIngest.status}`);
+          }
+        }
+
+        // Marca como concluído na fila
+        await fetch(`${apiBase}/api/extension/pending-captures`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ id: item.id, status: 'done' }),
+        });
+      } catch (e) {
+        console.error(`[capture-queue] Erro processando ${item.url}:`, e);
+        // Marca como erro na fila
+        try {
+          await fetch(`${apiBase}/api/extension/pending-captures`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({ id: item.id, status: 'error' }),
+          });
+        } catch { /* ignora falha ao reportar erro */ }
+      } finally {
+        if (tabId != null) {
+          try { await chrome.tabs.remove(tabId); } catch { /* já fechada */ }
+        }
+        // Delay entre capturas para evitar rate-limit do TikTok
+        await new Promise((r) => setTimeout(r, 8000));
+      }
+    }
+  } catch (e) {
+    console.error('[capture-queue] Erro no polling:', e);
+  } finally {
+    isPolling = false;
+  }
+}
+
+setInterval(pollCaptureQueue, POLL_INTERVAL_MS);
+// Primeira verificação após 5s (dá tempo do service worker inicializar)
+setTimeout(pollCaptureQueue, 5000);

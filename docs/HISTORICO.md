@@ -699,3 +699,88 @@ detalhes (320px) e ficasse centralizado na coluna principal.
   coluna de detalhes.
 - Build limpo, typecheck limpo, servidor operacional.
 - Documentação atualizada até esta seção.
+
+---
+
+## 8. Captura automática de comentários em lote (2026-09-27)
+
+### Contexto
+
+A captura de comentários era manual: o usuário precisava clicar em "Capturar
+comentários ↗" para cada vídeo individualmente, abrindo uma aba do TikTok por
+vez. Com dezenas de vídeos na fila, isso se tornou impraticável. O usuário
+pediu um botão que automatizasse todo o processo.
+
+### Arquitetura escolhida
+
+**Extensão-driven com backend como orquestrador** — descartou-se Puppeteer no
+backend (pesado, detectável pelo TikTok, perde sessão real do usuário) e
+scraping direto via fetch (TikTok bloqueia sem cookies válidos). A extensão já
+tinha scraper funcional e roda com a sessão real do usuário logado.
+
+Fluxo: UI → Backend (fila SQLite) → Extensão (polling) → TikTok → Ingest API.
+
+### O que foi feito
+
+**1. Tabela e funções de fila** (`repo.ts`):
+- Nova tabela `capture_queue` com campos: id, video_id, url, status
+  (pending/processing/done/error), attempts, timestamps.
+- `addToCaptureQueue()`: insere vídeos na fila, ignora duplicatas pendentes.
+- `getPendingCaptures(limit)`: retorna próximos itens para a extensão processar.
+- `completeCaptureQueueItem()` / `failCaptureQueueItem()`: marca conclusão ou
+  erro (após 3 falhas, marca como error permanente).
+- `captureQueueSummary()`: resumo por status para exibição na UI.
+
+**2. Endpoints da API**:
+- `POST /api/extension/capture-queue`: recebe lista de vídeos da UI e adiciona
+  à fila. Exige sessão do app.
+- `GET /api/extension/pending-captures?limit=N`: retorna itens pendentes para
+  a extensão. Autenticado por COMMENTS_INGEST_TOKEN (mesmo token do ingest).
+- `POST /api/extension/pending-captures`: marca item como done ou error.
+  Mesma autenticação por token.
+
+**3. Botão na UI** (`Library.tsx`):
+- Novo botão "Capturar comentários (N)" na barra de seleção em lote, ao lado
+  do botão de excluir. Aparece quando há vídeos selecionados.
+- Filtra apenas vídeos com URL de origem (sem URL = impossível abrir no TikTok).
+- Chama `POST /api/extension/capture-queue` e exibe confirmação com contagem.
+
+**4. Polling na extensão** (`background.js`):
+- `pollCaptureQueue()` roda a cada 30s via `setInterval`.
+- Consulta `/api/extension/pending-captures` usando token do storage local.
+- Para cada item: abre aba em background → aguarda carregamento → injeta
+  content script → coleta comentários → envia via ingest API → marca como
+  done na fila → fecha aba.
+- Delay de 8s entre capturas para evitar rate-limit do TikTok.
+- Em caso de erro: marca como error na fila (após 3 tentativas vira error
+  permanente).
+- Reutiliza funções existentes (`aguardarCarregamento`, `garantirScript`).
+
+**5. Permissões da extensão** (`manifest.json`):
+- Adicionada permissão `"tabs"` necessária para `chrome.tabs.create()` em
+  background e `chrome.tabs.remove()`.
+
+### Verificação
+
+- `npm run typecheck`: passou limpo.
+- `npm run build`: rotas `/api/extension/capture-queue` e
+  `/api/extension/pending-captures` listadas no output.
+- Manifest da extensão validado com nova permissão.
+
+### Como usar
+
+1. Na página principal (Fila), selecione os vídeos desejados clicando nos
+   checkboxes.
+2. Clique em "Capturar comentários (N)" na barra de seleção.
+3. A extensão (deve estar instalada e com o token configurado) irá processar
+   automaticamente a cada 30s, abrindo abas em background.
+4. Os comentários capturados aparecem nos respectivos vídeos após o
+   processamento.
+
+### Estado atual
+
+- Backend completo (tabela + endpoints + botão UI).
+- Extensão com polling implementado e permissões atualizadas.
+- **Próximo passo**: recarregar a extensão no Chrome (`chrome://extensions` →
+  ícone de reload) para ativar o polling, e testar o fluxo end-to-end com
+  vídeos reais do TikTok.
