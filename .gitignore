@@ -5,6 +5,8 @@ build/
 dist/
 data/uploads/
 data/artifacts/
+data/templates/
+data/output/
 data/*.db
 data/*.db-*
 data/*.sqlite

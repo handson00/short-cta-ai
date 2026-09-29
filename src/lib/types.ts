@@ -262,3 +262,106 @@ export interface SearchEvidence {
   url: string | null;
   source: string;
 }
+
+// ======================== EDITOR DE VÍDEOS EM MASSA ========================
+
+export interface EditorCrop {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  normalized: boolean;
+  confidence?: number;
+  source: "auto" | "profile" | "manual";
+}
+
+export interface EditorTemplate {
+  id: string;
+  name: string;
+  config: EditorTemplateConfig;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface EditorTemplateConfig {
+  background?: string;
+  overlay?: string;
+  logo?: string;
+  /** Cor de fundo em hex. Permite criar um template do zero, sem imagem. */
+  backgroundColor?: string;
+  canvasWidth: number;
+  canvasHeight: number;
+  videoX: number;
+  videoY: number;
+  videoWidth: number;
+  videoHeight: number;
+  fitMode: "fit" | "fill";
+  /** Posição fixa da logo, em pixels do canvas. A altura segue a proporção. */
+  logoX?: number;
+  logoY?: number;
+  logoWidth?: number;
+  logoHeight?: number;
+}
+
+export interface SourceProfile {
+  id: string;
+  name: string;
+  cropX: number;
+  cropY: number;
+  cropW: number;
+  cropH: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type EditorJobStatus =
+  | "pending"
+  | "analyzing"
+  | "ready"
+  | "processing"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export interface EditorJob {
+  id: string;
+  videoId: string;
+  templateId: string | null;
+  profileId: string | null;
+  crop: EditorCrop;
+  audio: EditorAudioSettings;
+  exportSettings: EditorExportSettings;
+  status: EditorJobStatus;
+  progress: number;
+  outputPath: string | null;
+  errorMessage: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+}
+
+export interface EditorAudioSettings {
+  mode: "original" | "mute" | "replace" | "mix";
+  originalVolume: number;
+  musicVolume: number;
+  musicPath?: string;
+}
+
+export interface EditorExportSettings {
+  width: number;
+  height: number;
+  fps: number;
+  videoCodec: string;
+  audioCodec: string;
+  bitrate?: number;
+  encoderMode: "auto" | "nvenc" | "qsv" | "amf" | "cpu";
+}
+
+export interface EditorSystemStatus {
+  ffmpeg: boolean;
+  ffprobe: boolean;
+  nvenc: boolean;
+  qsv: boolean;
+  amf: boolean;
+  libx264: boolean;
+}

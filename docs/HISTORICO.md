@@ -777,10 +777,646 @@ Fluxo: UI → Backend (fila SQLite) → Extensão (polling) → TikTok → Inges
 4. Os comentários capturados aparecem nos respectivos vídeos após o
    processamento.
 
+### Verificação end-to-end (2026-09-27)
+
+- Usuário selecionou 98 vídeos na Fila e clicou em "Capturar comentários (98)".
+- Backend confirmou: `98 vídeo(s) adicionado(s) à fila de captura`.
+- Consulta via API (`GET /api/extension/pending-captures`) confirmou 98 itens
+  com status `pending` na tabela `capture_queue`.
+- Após recarregar a extensão no Chrome (`chrome://extensions` → reload), o
+  polling iniciou automaticamente e os vídeos começaram a ser processados.
+- Fluxo completo validado: UI → fila SQLite → polling da extensão → TikTok →
+  ingest API → comentários salvos nos vídeos.
+
 ### Estado atual
 
+- Captura automática em lote funcional e testada em produção.
 - Backend completo (tabela + endpoints + botão UI).
-- Extensão com polling implementado e permissões atualizadas.
-- **Próximo passo**: recarregar a extensão no Chrome (`chrome://extensions` →
-  ícone de reload) para ativar o polling, e testar o fluxo end-to-end com
-  vídeos reais do TikTok.
+- Extensão com polling ativo e permissões atualizadas.
+- Editor de vídeos: Fase 1 concluída (ver seção 9).
+- Documentação atualizada até esta seção.
+
+---
+
+## 9. Editor de Vídeos Verticais em Massa — Fase 1 (Foundation)
+
+Implementado em 2026-09-27. Módulo isolado integrado ao projeto existente
+(Next.js 15 + React 19 + SQLite + FFmpeg), sem alterar stack ou arquitetura
+global.
+
+### Adaptações da especificação
+
+- **Tauri/Rust → Next.js API Routes**: backend em `/api/editor/*` usando o
+  wrapper FFmpeg existente (`src/lib/media/run.ts`).
+- **IPC → HTTP**: comunicação frontend-backend via fetch.
+- **Rusqlite → better-sqlite3**: reutiliza singleton `db()` e padrão de
+  migrations inline.
+- **Zustand → React state local**: módulo isolado, sem nova dependência.
+- **Paleta**: segue design system existente (`ink-*`, `accent`).
+
+### Arquivos criados
+
+- `src/lib/schema.ts` — tabelas `editor_templates`, `source_profiles`,
+  `editor_jobs` adicionadas ao schema existente.
+- `src/lib/types.ts` — tipos `EditorCrop`, `EditorTemplate`,
+  `EditorTemplateConfig`, `SourceProfile`, `EditorJob`, `EditorJobStatus`,
+  `EditorAudioSettings`, `EditorExportSettings`, `EditorSystemStatus`.
+- `src/lib/editorRepo.ts` — CRUD completo para templates, source profiles e
+  jobs do editor.
+- `src/app/api/editor/status/route.ts` — endpoint GET que verifica FFmpeg,
+  FFprobe e encoders disponíveis (NVENC, QSV, AMF, libx264) com teste real
+  de inicialização.
+- `src/app/editor/page.tsx` — página do módulo com auth guard.
+- `src/components/editor/EditorShell.tsx` — componente cliente que exibe
+  status do sistema e placeholder das próximas fases.
+
+### Arquivos modificados
+
+- `src/app/layout.tsx` — item "Editor" adicionado à navegação principal.
+
+### Verificação
+
+- Typecheck limpo (`npm run typecheck` exit 0).
+- Tabelas criadas automaticamente na próxima inicialização do servidor.
+- Rota `/api/editor/status` funcional e autenticada.
+
+### Próximas fases
+
+| Fase | Escopo |
+|------|--------|
+| 2 | Importação múltipla + FFprobe + thumbnails |
+| 3 | Crop manual com overlay retangular |
+| 4 | Smart Crop V1 (variação temporal + threshold) |
+| 5 | Templates (CRUD + video slot + fit/fill) |
+| 6 | Preview proxy 360p com cache |
+| 7 | Exportação MP4 (FilterGraphBuilder + progresso) |
+| 8 | Fila de jobs sequenciais com cancelamento |
+| 9 | Source profiles (salvar/carregar crop por origem) |
+
+### Estado atual
+
+- Fase 1 concluída e verificada.
+- Fase 2 revisada concluída (ver abaixo).
+- Módulo acessível em `/editor` com biblioteca integrada.
+
+---
+
+## 10. Editor de Vídeos — Fase 2 Revisada (Biblioteca Integrada)
+
+Implementado em 2026-09-28. Em vez de upload manual como fonte primária, o
+editor agora lista os vídeos já processados na plataforma (com CTA, comentários,
+hashtags e análise de cena) e permite seleção em lote para edição.
+
+### Arquivos criados
+
+- `src/app/api/editor/library/route.ts` — endpoint GET que retorna vídeos da
+  biblioteca com metadados completos (CTA, contagem de comentários/hashtags,
+  status da análise, thumbnail).
+
+### Arquivos modificados
+
+- `src/components/editor/EditorShell.tsx` — substituiu a grade de uploads
+  manuais por uma grade da biblioteca com:
+  - Seleção individual por clique e botão "Selecionar todos"
+  - Badges visuais para CTA, Análise, Comentários e Hashtags
+  - Preview do texto do CTA gerado
+  - Barra de ação com contador de selecionados e botão "Editar selecionados →"
+  - Upload manual mantido como `<details>` colapsável (fallback)
+  - Carregamento paralelo de status do sistema + biblioteca no mount
+
+### Integração com dados existentes
+
+- CTAs gerados na Fila aparecem como preview nos cards do editor
+- Contagem de comentários capturados pela extensão exibida como badge
+- Hashtags virais geradas por IA contabilizadas nos cards
+- Source profiles poderão ser pré-preenchidos com crop detectado na análise
+  visual (Fase 4)
+- Rota `/api/editor/import` permanece como fallback para vídeos externos
+
+### Verificação
+
+- Typecheck limpo (`npm run typecheck` exit 0).
+- Build regenerado com sucesso.
+- Servidor precisa ser reiniciado no CMD (`npm start`) para refletir.
+
+### Próximas fases
+
+| Fase | Escopo |
+|------|--------|
+| 3 | Crop manual com overlay retangular |
+| 4 | Smart Crop V1 (variação temporal + threshold) |
+| 5 | Templates (CRUD + video slot + fit/fill) |
+| 6 | Preview proxy 360p com cache |
+| 7 | Exportação MP4 (FilterGraphBuilder + progresso) |
+| 8 | Fila de jobs sequenciais com cancelamento |
+| 9 | Source profiles (salvar/carregar crop por origem) |
+
+### Ajuste de layout (2026-09-28)
+
+- Editor reestruturado em duas colunas: lista de vídeos à esquerda e preview
+  lateral à direita.
+- Cards da biblioteca agora usam `aspect-video` (mesma proporção da página
+  principal / Fila).
+- Preview lateral exibe player de vídeo, metadados (resolução, duração), CTA
+  gerado e badges de análise/comentários/hashtags.
+- Clique no card seleciona para edição em lote E ativa o preview
+  simultaneamente.
+- Typecheck limpo, build regenerado.
+
+### Estado atual
+
+- Fase 2 revisada concluída e documentada.
+- Biblioteca de vídeos processados integrada ao editor.
+- Layout de duas colunas com preview lateral funcional.
+- Seleção em lote funcional na UI.
+- Pronto para iniciar Fase 3 (crop manual).
+
+---
+
+## 11. Transcrição: 95 vídeos analisados surdos (2026-09-28)
+
+O usuário relatou que a transcrição não funcionava. A tela dizia "Sem fala
+compreensível reconhecida neste vídeo · Provedor: faster-whisper".
+
+### A causa
+
+`FASTER_WHISPER_PYTHON` no `.env.local` apontava para um caminho inexistente —
+erro de um dígito no nome da pasta:
+
+```
+python-3.14.7+20250901-win32-x64   ← configurado
+python-3.14.7+20260901-win32-x64   ← pasta real
+```
+
+E o caminho corrigido também não serviria: aquele Python não tem o pacote. O
+`faster_whisper` 1.2.1 está no Python 3.12
+(`C:/Users/adz/AppData/Local/Programs/Python/Python312/python.exe`).
+
+### Por que ninguém percebeu
+
+Esta é a **segunda vez** que o mesmo padrão custa caro no projeto — a primeira
+foi o OCR (§ do HANDOFF 5.1).
+
+O backend estava certo: `runner.ts` capturava o erro e gravava
+`"Transcrição indisponível: faster-whisper nao esta instalado..."` em
+`transcripts.warnings_json`. O `repo.ts` mapeava o campo corretamente e o
+`view.ts` o repassava ao cliente. Mas o painel de Transcrição em
+`VideoDetailView.tsx` só olhava `hasSpeech` e imprimia uma frase genérica.
+
+Resultado: **95 dos 98 vídeos** tinham a mensagem de falha gravada no banco, e
+a interface dizia a mesma coisa que diria para um vídeo genuinamente mudo. A IA
+vinha gerando CTAs sem o diálogo — o resumo de cena de um vídeo dizia
+literalmente "Não há transcrição de áudio disponível".
+
+### Correção
+
+| Arquivo | O que mudou |
+| --- | --- |
+| `.env.local` | `FASTER_WHISPER_PYTHON` para o Python 3.12 |
+| `src/components/VideoDetailView.tsx` | O painel exibe os `warnings` quando não há fala, em vez da frase genérica |
+
+### Verificação
+
+Rodado o comando exato de produção num áudio real: 80 segmentos em português.
+Depois, reanálise de **um** vídeo pelo caminho completo da aplicação
+(job → `runner.ts` → banco → interface): `has_speech: 1`, idioma `pt`, 2.421
+caracteres. O resumo da cena passou de "evidências extremamente limitadas" para
+a narrativa real do corte.
+
+### Pendência
+
+Os outros 94 vídeos continuam com a transcrição falha gravada. Só melhoram com
+"Analisar novamente", e reprocessar consome chamadas reais do GhostCLI.
+
+### A lição, de novo
+
+Uma falha de provedor não pode chegar à tela com a mesma aparência de um dado
+ausente. Quando isso acontece, o sistema perde a capacidade de avisar que está
+quebrado — e continua produzindo resultado com cara de normal.
+
+---
+
+## 12. Editor de Vídeos — Fase 3 (Crop Manual)
+
+Implementada em 2026-09-28. Aceite da §98 da spec: o usuário define manualmente
+a região útil do vídeo.
+
+Antes de implementar, o módulo foi auditado contra a especificação. A auditoria
+encontrou três coisas que a documentação anterior não registrava:
+
+- `editorRepo.ts` tinha 292 linhas e **nenhum chamador** — as três tabelas do
+  editor nunca recebiam uma linha.
+- O botão "Editar selecionados →" não tinha `onClick`. Todo o fluxo de seleção
+  terminava num botão decorativo.
+- `/api/editor/videos` também não tinha chamador, duplicando `/library`.
+
+Isso fazia o módulo parecer mais pronto do que estava: na prática, o editor
+**não recortava, não aplicava template e não exportava** — as três coisas que
+justificam o módulo (§164).
+
+### Arquivos criados
+
+| Arquivo | Função |
+| --- | --- |
+| `src/lib/editor/crop.ts` | Geometria do recorte: arraste, clamp, fração ↔ pixel |
+| `src/components/editor/CropOverlay.tsx` | Retângulo sobre o vídeo, 8 handles, arraste |
+| `src/app/api/editor/crop/route.ts` | GET / POST / DELETE do recorte por vídeo |
+| `tests/editorCrop.test.ts` | 14 testes |
+| `docs/video-editor/ARCHITECTURE.md` | Entregável pendente da Fase 0 (§150) |
+| `docs/video-editor/IMPLEMENTATION_PLAN.md` | Rastreador de fases (§151) |
+
+### Arquivos modificados
+
+| Arquivo | O que mudou |
+| --- | --- |
+| `src/lib/schema.ts` | Tabela `editor_video_crops` (§61) |
+| `src/lib/editorRepo.ts` | CRUD de recorte; deixou de ser código morto |
+| `src/components/editor/EditorShell.tsx` | Painel de recorte, campos numéricos, botões de aplicar; `fileInputRef` duplicado removido |
+
+### Decisões que não são óbvias
+
+- **Recorte guardado em fração (0..1), não em pixel** (§24): o mesmo valor serve
+  a 720×1280 e 1080×1920. É o que vai permitir o perfil de origem da Fase 9.
+- **`toPixels()` arredonda para par.** H.264 em yuv420p recusa lado ímpar; um
+  recorte de 911 px só quebraria na exportação, longe da causa.
+- **Campos numéricos em pixels da fonte.** "x = 84" é conferível contra o
+  arquivo; "x = 0,0778" não é.
+- **Geometria fora do componente** (`lib/editor/crop.ts`): é a única parte do
+  recorte que dá para testar sem navegador.
+- **`saveVideoCrops()` é transação.** "Aplicar a todos" ou grava tudo ou não
+  grava nada — um lote pela metade deixaria o usuário sem saber quais vídeos
+  ficaram com o recorte antigo.
+- **Resetar volta ao quadro inteiro**, não a um retângulo sugerido. Sugerir
+  recorte sem ter analisado o vídeo seria inventar; isso é a Fase 4.
+
+### Verificação
+
+Typecheck limpo, `npm test` 156/156 (14 novos), build regenerado. Pela API:
+gravar, ler de volta e apagar funcionam; recorte que ultrapassa a borda devolve
+422 com mensagem específica; uma string `-vf crop=...` no lugar do número
+também devolve 422 (§83).
+
+**Não verificado:** o arraste dos handles no navegador. A geometria tem teste
+unitário, mas ninguém arrastou um handle numa tela ainda.
+
+### Estado atual
+
+- Fase 3 concluída; Fase 0 fechada retroativamente.
+- Andamento por fase agora vive em `docs/video-editor/IMPLEMENTATION_PLAN.md`.
+- Próxima: Fase 4 (Smart Crop V1).
+
+---
+
+## 13. Editor — "vídeos duplicados" e a promoção explícita (2026-09-28)
+
+O usuário usou o crop manual, funcionou, e relatou: "tem alguns vídeos que
+estão repetidos".
+
+### Não havia nada duplicado
+
+98 vídeos distintos no acervo; a rota `/api/editor/library` devolvia **109
+linhas**. A causa era *fan-out* de `LEFT JOIN`: cada reanálise insere uma linha
+nova em `scene_analyses`, e o JOIN multiplicava o vídeo por quantas análises
+ele tivesse. Seis vídeos tinham análise repetida, somando 17 linhas — as 11
+linhas extras. O vídeo que eu havia reanalisado na sessão anterior tinha 6
+análises e aparecia 6 vezes na grade.
+
+É a terceira vez que o sintoma na tela aponta para o lugar errado neste
+projeto (OCR, transcrição, agora isto). O padrão se repete: o dado estava
+certo, a camada que o lê é que estava errada.
+
+**Correção:** todo agregado da rota virou subconsulta correlacionada —
+contagem de comentários, hashtags, CTA e análise. Isso elimina a classe inteira
+do defeito, não só a ocorrência do `scene_analyses`.
+
+### A mudança de fluxo
+
+O editor listava todos os vídeos do acervo. O usuário pediu que a entrada na
+segunda fase fosse explícita: depois de analisar, ele seleciona o que quer e
+manda para a edição por um botão.
+
+Foi implementado como promoção explícita (`editor_videos`) em vez de filtro por
+`status = done`, porque:
+
+- O usuário controla o lote — analisar 98 não obriga a editar 98.
+- É reversível: dá para tirar da edição sem apagar do acervo.
+- Um filtro por status mudaria de conteúdo sozinho conforme jobs terminassem,
+  no meio de uma sessão de edição.
+
+### Arquivos
+
+| Arquivo | O que mudou |
+| --- | --- |
+| `src/lib/schema.ts` | Tabela `editor_videos` |
+| `src/lib/editorRepo.ts` | `addVideosToEditor` / `removeVideoFromEditor` / `listEditorVideoIds` |
+| `src/app/api/editor/queue/route.ts` | Novo — GET / POST / DELETE |
+| `src/app/api/editor/library/route.ts` | Só promovidos; agregados viraram subconsulta |
+| `src/components/Library.tsx` | Botão "Enviar para edição (N)" |
+| `src/components/editor/EditorShell.tsx` | Estado vazio com o caminho; × para remover |
+
+### Verificação
+
+Typecheck limpo, 156/156, build refeito. Vídeo com 6 análises passou a gerar 1
+card; os 98 do acervo geram 98 cards. Promover o mesmo vídeo duas vezes devolve
+`added: 0, alreadyThere: 1` em vez de duplicar.
+
+O `editor_videos` foi deixado **vazio** de propósito: o usuário escolhe o que
+promover.
+
+---
+
+## 14. Editor — Fase 4 (Smart Crop V1)
+
+Implementada em 2026-09-28. Aceite da §99: o vídeo central é detectado
+automaticamente em molduras predominantemente estáticas.
+
+### A ideia
+
+Numa moldura de outra página, o quadro externo fica parado e o filme no meio
+muda o tempo todo. Medindo quanto cada pixel varia ao longo dos frames, a
+região do conteúdo se separa sozinha — sem modelo de IA, sem GPU, offline
+(§142).
+
+16 frames em cinza a 180px → diferença média absoluta entre frames consecutivos
+→ projeção em linhas e colunas → primeiro/último índice acima de 30% do máximo
+→ confiança = separação × captura.
+
+### Sem dependência nova
+
+Os frames saem do FFmpeg como `-f rawvideo -pix_fmt gray`: um byte por pixel,
+sem cabeçalho. É o mesmo truque que `media/ffmpeg.ts` já usava para o average
+hash. Não há PNG para decodificar, e o projeto não ganhou `sharp` nem `jimp`.
+
+### Desvio consciente da spec
+
+A spec pede threshold binário (§17), morfologia (§18), detecção de bordas (§19)
+e consenso entre candidatos (§92). Aqui é projeção em linhas/colunas.
+
+Motivo: morfologia existe para achar formas arbitrárias. A forma procurada aqui
+é sempre um retângulo alinhado aos eixos, e projetar resolve isso com muito
+menos código e sem biblioteca de imagem. A §108 não exige precisão perfeita e a
+§142 pede primeira versão determinística.
+
+### Arquivos criados
+
+| Arquivo | Função |
+| --- | --- |
+| `src/lib/editor/motion.ts` | Detecção pura — testável sem vídeo |
+| `src/lib/editor/smartCrop.ts` | Extração dos frames via FFmpeg |
+| `src/app/api/editor/smart-crop/route.ts` | POST, individual ou em lote |
+| `tests/editorMotion.test.ts` | 16 testes |
+
+`src/components/editor/EditorShell.tsx` ganhou "Detectar automaticamente", o
+aviso de confiança nas três faixas da §22 e a detecção em lote.
+
+### Decisões que não são óbvias
+
+- **A suavização alarga o retângulo em ~1 pixel por lado, de propósito.**
+  Sobrar é invisível no vídeo final; faltar corta conteúdo, o pior erro
+  possível aqui. Há teste travando isso — um teste falhou exatamente nesse
+  ponto e a resposta certa foi corrigir o teste, não o código.
+- **O span usa primeiro/último acima do limiar**, não a maior sequência
+  contígua: uma cena escura no meio do corte cortaria o conteúdo ao meio.
+- **Diferença média absoluta, não variância.** Mudança lenta de iluminação
+  inflaria a variância do quadro inteiro e apagaria o contraste que interessa.
+- **Detectar não aplica** (§22). O individual carrega o retângulo e mostra a
+  confiança; quem grava é o usuário. Só o lote grava direto — e o aviso diz
+  quantos saíram com confiança baixa, em vez de um "30 detectados" que
+  esconderia os que precisam de revisão.
+- **"Nenhuma moldura detectada" não é erro.** Devolve `hasBorder: false` e não
+  grava nada. Gravar o quadro inteiro como "detecção" faria uma não-descoberta
+  parecer resultado.
+
+### Verificação
+
+Typecheck limpo, 172/172 testes, build refeito. Detecção rodada em 3 vídeos
+reais do acervo: ~1,6 s por vídeo, confiança entre 82 e 85, todos devolvendo
+largura cheia com faixa vertical central — a forma esperada para esse material.
+
+**Não verificado:** se o retângulo está visualmente certo sobre a imagem.
+
+### Limitação conhecida
+
+Moldura com elemento animado alarga o retângulo, e a confiança cai junto. O
+caminho para isso é a Fase 9 (perfil de origem): gravar o recorte uma vez e
+reusar em todos os vídeos da mesma página.
+
+---
+
+## 15. Editor — Fase 5 (Templates)
+
+Implementada em 2026-09-28. Aceite da §100: o usuário consegue inserir o crop
+no template.
+
+### O que entrou
+
+Upload de fundo, overlay e logo; CRUD de templates; área do vídeo (video slot)
+ajustável por arraste ou por campo numérico; modos FIT e FILL; atribuição do
+template a vários vídeos de uma vez; e um preview que desenha as camadas na
+ordem da §28.
+
+As tabelas `editor_templates` — criadas na Fase 1 e sem uso desde então —
+finalmente passaram a receber dados.
+
+### Decisões que não são óbvias
+
+- **A conta de encaixe mora em `lib/editor/template.ts`, fora da interface.**
+  É a mesma conta que o preview e a exportação (Fase 7) precisam fazer. Duas
+  implementações da mesma composição é a forma mais fácil de o preview mentir
+  sobre o resultado final (§86).
+- **`croppedAspect()` usa a proporção do recorte, não a do arquivo.** Recortar
+  muda a forma do que vai ser encaixado; usar a proporção original deformaria
+  o vídeo.
+- **O slot reusa o `CropOverlay` da Fase 3.** É o mesmo gesto, agora sobre o
+  canvas em vez do vídeo.
+- **Upload validado por assinatura de bytes, não por extensão** (§84), com nome
+  gerado pelo servidor — mesma regra do upload de vídeo.
+- **Canvas com lado ímpar é recusado ao salvar.** H.264 em yuv420p não aceita,
+  e descobrir isso só na exportação seria descobrir longe da causa.
+
+### Um defeito que só o teste end-to-end pegou
+
+Apagar um template deixava os vídeos apontando para ele, e a interface mostrava
+o selo "Template" num vídeo que não tinha mais nenhum.
+
+Causa: `editor_videos` já existia no banco do usuário, então `template_id`
+entrou por `ALTER TABLE ADD COLUMN` — e o SQLite **não cria chave estrangeira
+por ALTER TABLE**. O `ON DELETE SET NULL` declarado no `CREATE TABLE` nunca
+existiu naquele banco.
+
+Correção: `deleteEditorTemplate` limpa as referências explicitamente, numa
+transação, sem depender da FK.
+
+**Regra que fica:** coluna adicionada por migração não tem a constraint que o
+schema declara. Se o comportamento depende dela, escreva o comportamento.
+
+### Verificação
+
+Typecheck limpo, 188/188 testes (16 novos), build refeito. Pela API: criar
+template, recusar slot fora do canvas (422 nomeando a borda), recusar canvas
+ímpar, atribuir a vários vídeos, e apagar zerando as referências.
+
+**Não verificado:** preview da composição na tela, upload pelo navegador e
+arraste do slot.
+
+---
+
+## 16. Editor — Fase 5.1 (template criado na plataforma)
+
+Pedido do usuário depois de usar a Fase 5, em 2026-09-28.
+
+### Três pedidos
+
+1. **"Criar um próprio template dentro da plataforma"** — montar do zero, sem
+   depender de uma imagem pronta. Virou `backgroundColor` em hex: dá para ter
+   um template só com cor de fundo.
+2. **"Colocar uma logo, uma logo fixa"** — `logoX/Y/Width/Height` em pixels do
+   canvas, arrastável no preview e editável por campo numérico.
+3. **"Quero apenas importar os templates, não precisa importar outras coisas"**
+   — removido o upload manual de vídeo do editor. Os vídeos entram só pela
+   Fila, pelo botão "Enviar para edição".
+
+### Decisões que não são óbvias
+
+- **A logo reusa o `CropOverlay`, com um seletor "Área do vídeo / Logo".** Dois
+  retângulos arrastáveis ao mesmo tempo competiriam pelo clique; o seletor diz
+  qual está em edição, e os campos numéricos seguem a mesma escolha.
+- **A validação da logo só roda quando existe imagem de logo.** Um template sem
+  logo não pode ser recusado por uma posição que ninguém vai usar.
+- **A rota `/api/editor/import` continua no disco, só sem interface.** O pedido
+  foi "por enquanto"; manter o backend deixa o retorno barato.
+- **Cor de fundo validada como `#RRGGBB` no servidor**, mesmo o seletor do
+  navegador sempre mandando válido: a rota não pode depender do cliente.
+
+### Verificação
+
+Typecheck limpo, 194/194 testes, build refeito. Pela API: template só com cor e
+logo (sem imagem), recusa de cor malformada, recusa de logo fora do canvas, e
+aplicação a 3 vídeos de uma vez.
+
+O usuário já havia criado "Meu template 1" pelo navegador, com fundo e logo
+enviados pela interface e slot em modo FILL — o upload e o editor funcionam.
+
+### O que ainda falta para "ficar pronto"
+
+Aplicar o template hoje **grava a associação**, não produz arquivo. O vídeo
+final só existe depois da Fase 7 (exportação): FilterGraphBuilder, render em
+MP4/H.264/AAC e progresso. É o próximo passo.
+
+---
+
+## 17. Editor — Fase 7 (Exportação MP4)
+
+Implementada em 2026-09-28. Aceite da §102: um vídeo pode ser renderizado
+corretamente. É a fase que fecha o ciclo — antes dela o módulo preparava tudo
+e não produzia arquivo nenhum.
+
+### Estrutura
+
+O `filter_complex` é montado por uma função pura (`lib/editor/filterGraph.ts`)
+que devolve texto. Isso permite conferir o comando num teste sem rodar o
+FFmpeg, e garante que nenhuma string vinda do navegador vire comando: os
+argumentos vão em array, nunca linha de shell (§45, §83).
+
+O mesmo vale para o parser de progresso (`lib/editor/progress.ts`), que lê o
+`-progress pipe:1`.
+
+### Decisões que não são óbvias
+
+- **Grava em `.processing` e renomeia no fim** (§114): cancelamento nunca deixa
+  um MP4 truncado com cara de pronto.
+- **O nome de saída nunca sobrescreve** (§110). Quem ajustou o template e
+  rodou de novo ainda pode comparar os dois resultados.
+- **Encoder pedido explicitamente que não funciona não cai para CPU em
+  silêncio.** Trocar por baixo faria a exportação demorar dez vezes mais sem
+  explicação. Só `auto` desce a lista de prioridade.
+- **Exportação sequencial** (§56): vinte FFmpegs simultâneos deixariam a
+  máquina inutilizável, e cada um mais lento do que todos em fila.
+- **O parser corta por `/\r?\n/`**, com teste de CRLF. Foi um `\r` não tratado
+  na saída do Tesseract que manteve o OCR deste projeto quebrado por dois dias.
+
+### Dois defeitos pegos antes de virarem problema
+
+**`toPixels` devolvia lado ímpar.** Arredondava para par e *depois* limitava ao
+tamanho da fonte — com fonte de lado ímpar, o `Math.min` desfazia o
+arredondamento. O H.264 recusaria, mas só na exportação, longe da causa. O
+teste "todas as dimensões são pares" pegou. Corrigido com `evenUp`/`evenDown`:
+quando o número é um limite, ele também precisa ser par.
+
+**`.processing` quebrava o FFmpeg.** Ele deduz o container pela extensão e
+recusava `arquivo.mp4.processing`. Só apareceu no teste com vídeo real.
+Corrigido com `-f mp4` explícito, mantendo a proteção do §114.
+
+### Verificação
+
+Typecheck limpo, 219/219 testes (21 novos), build refeito.
+
+**Render real:** um vídeo de 92 s saiu em 13,5 s. O encoder foi escolhido
+sozinho — `h264_qsv` (Intel Quick Sync), ~7× tempo real. O `ffprobe` confirmou
+H.264 · 1080×1920 · yuv420p · 30 fps · AAC, e um frame extraído confirmou a
+composição: vídeo encaixado no slot, logo aplicada, fundo do template.
+
+Nenhum `.processing` sobrou na pasta.
+
+### O que fica para a Fase 8
+
+A exportação em lote roda dentro da requisição HTTP. Para dezenas de vídeos
+precisa virar fila com estado persistido: a tabela `editor_jobs` já recebe
+status e progresso, falta o worker que a consome.
+
+---
+
+## 18. Editor — logo deformada e aba de Preview (Fase 7.1)
+
+Relatado pelo usuário depois do primeiro render real, em 2026-09-28: "a logo
+saiu muito esticada". E o pedido de uma aba para ver o resultado antes de
+exportar.
+
+### O defeito
+
+O filter graph fazia `scale=240:240`, que força as duas dimensões e deforma
+qualquer logo que não seja quadrada.
+
+O detalhe importante: **o preview do template já estava certo.** Ele usava
+`object-contain`, que cabe a imagem na caixa sem deformar. Preview e exportação
+discordavam — exatamente o que a §86 manda evitar, e a razão de ela existir.
+
+Correção:
+
+```
+scale=LW:LH:force_original_aspect_ratio=decrease
+overlay=LX+(LW-overlay_w)/2:LY+(LH-overlay_h)/2
+```
+
+A expressão com `overlay_w`/`overlay_h` centraliza a logo na caixa; as
+dimensões reais só existem em tempo de execução, porque dependem da proporção
+do arquivo enviado.
+
+Verificado comparando dois renders do mesmo vídeo e recortando a região da
+logo: antes visivelmente esticada na horizontal, depois na proporção correta.
+
+### A aba de Preview
+
+O painel da direita ganhou duas abas: Recorte e Preview. A de Preview mostra o
+vídeo tocando dentro do template, com o recorte aplicado — o resultado da
+exportação, antes de exportar.
+
+Para isso a composição virou um componente único, `CompositionPreview.tsx`,
+usado pelo editor de template **e** pela aba. O `TemplatePanel` perdeu ~70
+linhas duplicadas.
+
+A decisão foi direta consequência do defeito acima: duas telas desenhando a
+mesma composição por caminhos diferentes é a forma mais fácil de uma mentir
+sobre o resultado.
+
+### O que a aba não é
+
+Não é o proxy 360p com cache da §41. A composição é montada no DOM — é
+instantânea e deixa tocar o vídeo, mas quem renderiza é o navegador, não o
+FFmpeg. A geometria, que é o que importa, vem da mesma função dos dois lados.
+
+### Observação sobre os arquivos já exportados
+
+Os vídeos exportados antes desta correção têm a logo esticada e precisam ser
+exportados de novo. Como o nome de saída nunca sobrescreve (§110), os antigos
+continuam na pasta — apague-os à mão se não quiser guardá-los.

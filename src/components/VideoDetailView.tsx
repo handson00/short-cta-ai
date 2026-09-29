@@ -296,7 +296,15 @@ export default function VideoDetailView({ videoId }: { videoId: string }) {
               {showTranscript && (
                 <div className="mt-3">
                   {!detail.transcript?.hasSpeech ? (
-                    <p className="hint">Sem fala compreensível reconhecida neste vídeo.</p>
+                    (detail.transcript?.warnings ?? []).length > 0 ? (
+                      <ul className="space-y-1 text-sm text-amber-200/90">
+                        {(detail.transcript?.warnings ?? []).map((w: string) => (
+                          <li key={w}>{w}</li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="hint">Sem fala compreensível reconhecida neste vídeo.</p>
+                    )
                   ) : (
                     <ul className="scroll-thin max-h-80 space-y-1 overflow-y-auto pr-2 text-sm">
                       {(detail.transcript?.segments ?? []).map((seg, i) => (

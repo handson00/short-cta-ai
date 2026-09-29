@@ -225,4 +225,66 @@ CREATE TABLE IF NOT EXISTS app_settings (
   value_json TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+-- ===================== EDITOR DE VÍDEOS EM MASSA =========================
+
+CREATE TABLE IF NOT EXISTS editor_templates (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  config_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS source_profiles (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  crop_x REAL NOT NULL,
+  crop_y REAL NOT NULL,
+  crop_w REAL NOT NULL,
+  crop_h REAL NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS editor_jobs (
+  id TEXT PRIMARY KEY,
+  video_id TEXT NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+  template_id TEXT REFERENCES editor_templates(id) ON DELETE SET NULL,
+  profile_id TEXT REFERENCES source_profiles(id) ON DELETE SET NULL,
+  crop_json TEXT NOT NULL DEFAULT '{}',
+  audio_json TEXT NOT NULL DEFAULT '{}',
+  export_json TEXT NOT NULL DEFAULT '{}',
+  status TEXT NOT NULL DEFAULT 'pending',
+  progress INTEGER NOT NULL DEFAULT 0,
+  output_path TEXT,
+  error_message TEXT,
+  created_at TEXT NOT NULL,
+  started_at TEXT,
+  completed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_editor_jobs_status ON editor_jobs(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_editor_jobs_video ON editor_jobs(video_id, created_at DESC);
+
+-- Vídeos promovidos da análise para a edição. A entrada na segunda fase é
+-- explícita: terminar a análise não joga o vídeo no editor sozinho, senão o
+-- editor vira um espelho da Fila e o usuário perde o controle do lote.
+CREATE TABLE IF NOT EXISTS editor_videos (
+  video_id TEXT PRIMARY KEY REFERENCES videos(id) ON DELETE CASCADE,
+  added_at TEXT NOT NULL,
+  template_id TEXT REFERENCES editor_templates(id) ON DELETE SET NULL
+);
+
+-- Recorte por vídeo. Guardado em coordenadas normalizadas (0..1) para o mesmo
+-- perfil servir a 720x1280, 1080x1920 e 1440x2560 sem reconversão.
+CREATE TABLE IF NOT EXISTS editor_video_crops (
+  video_id TEXT PRIMARY KEY REFERENCES videos(id) ON DELETE CASCADE,
+  crop_x REAL NOT NULL,
+  crop_y REAL NOT NULL,
+  crop_w REAL NOT NULL,
+  crop_h REAL NOT NULL,
+  confidence REAL,
+  source TEXT NOT NULL DEFAULT 'manual',
+  updated_at TEXT NOT NULL
+);
 `;

@@ -15,6 +15,7 @@ export const viewport: Viewport = {
 
 const NAV = [
   { href: "/", label: "Fila" },
+  { href: "/editor", label: "Editor" },
   { href: "/style", label: "Meu estilo" },
   { href: "/usage", label: "Uso da IA" },
   { href: "/settings", label: "Configurações" },

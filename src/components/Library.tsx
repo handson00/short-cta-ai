@@ -37,6 +37,7 @@ export default function Library() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [bulkCapturing, setBulkCapturing] = useState(false);
+  const [bulkSending, setBulkSending] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const folderRef = useRef<HTMLInputElement>(null);
 
@@ -204,6 +205,38 @@ export default function Library() {
       await refresh();
     } finally {
       setBulkDeleting(false);
+    }
+  }
+
+  async function sendSelectedToEditor() {
+    const ids = [...selectedIds];
+    if (ids.length === 0) return;
+
+    setBulkSending(true);
+    try {
+      const res = await fetch("/api/editor/queue", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ videoIds: ids }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        added?: number;
+        alreadyThere?: number;
+        error?: string;
+      };
+      if (!res.ok) {
+        alert(data.error ?? "Falha ao enviar para o editor.");
+        return;
+      }
+      const repetidos = data.alreadyThere
+        ? ` ${data.alreadyThere} já estava(m) lá.`
+        : "";
+      alert(`${data.added ?? 0} vídeo(s) enviado(s) para o editor.${repetidos}`);
+      setSelectedIds(new Set());
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Falha ao enviar para o editor.");
+    } finally {
+      setBulkSending(false);
     }
   }
 
@@ -430,8 +463,15 @@ export default function Library() {
                   </button>
                   <button
                     className="btn px-2 py-0.5 text-[10px] bg-accent/90 text-white hover:bg-accent ml-auto"
+                    onClick={() => void sendSelectedToEditor()}
+                    disabled={bulkSending || bulkCapturing || bulkDeleting}
+                  >
+                    {bulkSending ? "Enviando…" : `Enviar para edição (${selectedIds.size})`}
+                  </button>
+                  <button
+                    className="btn-quiet px-2 py-0.5 text-[10px]"
                     onClick={() => void captureSelectedComments()}
-                    disabled={bulkCapturing || bulkDeleting}
+                    disabled={bulkCapturing || bulkDeleting || bulkSending}
                   >
                     {bulkCapturing ? "Enfileirando…" : `Capturar comentários (${selectedIds.size})`}
                   </button>

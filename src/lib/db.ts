@@ -11,6 +11,7 @@ export function db(): Database.Database {
 
   fs.mkdirSync(env.uploadsDir, { recursive: true });
   fs.mkdirSync(env.artifactsDir, { recursive: true });
+  fs.mkdirSync(env.templatesDir, { recursive: true });
   fs.mkdirSync(path.dirname(env.databasePath), { recursive: true });
 
   const handle = new Database(env.databasePath);
@@ -20,9 +21,22 @@ export function db(): Database.Database {
   handle.exec(SCHEMA_SQL);
 
   migrateTiktokColumns(handle);
+  migrateEditorColumns(handle);
 
   instance = handle;
   return handle;
+}
+
+/** Bancos que já tinham `editor_videos` antes do template ganham a coluna aqui. */
+function migrateEditorColumns(handle: Database.Database): void {
+  const columns = new Set(
+    (handle.pragma("table_info(editor_videos)") as { name: string }[]).map((c: any) => c.name),
+  );
+  if (columns.size > 0 && !columns.has("template_id")) {
+    // Sem REFERENCES: o SQLite não cria chave estrangeira por ALTER TABLE.
+    // Por isso `deleteEditorTemplate` limpa as referências explicitamente.
+    handle.exec("ALTER TABLE editor_videos ADD COLUMN template_id TEXT");
+  }
 }
 
 /** Bancos criados antes da funcionalidade TikTok ganham as colunas novas aqui. */

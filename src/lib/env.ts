@@ -29,6 +29,8 @@ export const env = {
   dataDir,
   uploadsDir: path.join(dataDir, "uploads"),
   artifactsDir: path.join(dataDir, "artifacts"),
+  templatesDir: path.join(dataDir, "templates"),
+  outputDir: str("EDITOR_OUTPUT_DIR", path.join(dataDir, "output")),
   databasePath: str("DATABASE_PATH", path.join(dataDir, "short-cta-ai.db")),
 
   // Token que autoriza a extensao a enviar comentarios. Sem valor configurado,
