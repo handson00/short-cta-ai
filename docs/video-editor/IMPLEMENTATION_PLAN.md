@@ -17,16 +17,17 @@ Legenda: ✅ pronto e verificado · ⚠️ parcial · ❌ não feito
 | --- | --- | --- |
 | 0 | Análise + documentação | ✅ 2026-09-28 |
 | 1 | Foundation | ✅ 2026-09-27 |
-| 2 | Video Library | ⚠️ parcial |
+| 2 | Video Library | ✅ redefinida — os vídeos vêm da Fila (2.5); drag & drop deixou de se aplicar |
 | 2.5 | Promoção explícita para a edição | ✅ 2026-09-28 |
 | 3 | Crop manual | ✅ 2026-09-28 |
 | 4 | Smart Crop V1 | ✅ 2026-09-28 |
 | 5 | Templates | ✅ 2026-09-28 |
 | 6 | Preview (proxy + 3 modos) | ⚠️ parcial — aba Preview feita, proxy não |
 | 7 | Exportação MP4 | ✅ 2026-09-28 |
-| 8 | Fila de jobs | ❌ |
+| 8 | Fila de jobs + formato para Reels/TikTok | ✅ 2026-09-28 |
+| 8.1 | Revisão e alinhamento do módulo | ✅ 2026-09-29 |
 | 9 | Perfis de origem | ❌ |
-| 10 | Texto e áudio | ❌ |
+| 10 | Texto (CTA) e áudio | ✅ 2026-09-29 |
 
 ---
 
@@ -527,12 +528,255 @@ extraído, antes e depois.
 
 ---
 
+## Fase 8 — Fila de exportação e formato para Reels/TikTok · ✅ 2026-09-28
+
+**Aceite (§103):** vários vídeos são processados com concorrência controlada. ✅
+
+Pedido do usuário: exportar em massa, rápido, e no melhor formato para
+TikTok e Instagram.
+
+### Arquivos
+
+| Arquivo | Função |
+| --- | --- |
+| `src/lib/editor/exportQueue.ts` | Worker: claim, concorrência, cancelamento, retomada |
+| `src/lib/editor/exportPreset.ts` | Preset de saída para Reels/TikTok — puro, testável |
+| `src/components/editor/ExportQueuePanel.tsx` | Progresso do lote e de cada vídeo, cancelar, ETA |
+| `src/app/api/editor/export/route.ts` | Agora só enfileira e responde na hora |
+| `src/lib/editorRepo.ts` | `claimNextEditorJob` e demais funções da fila |
+| `src/instrumentation.ts` | Sobe a fila junto com o servidor |
+| `tests/editorPreset.test.ts` | 20 testes do contrato de formato |
+
+### Velocidade
+
+- **A requisição não renderiza mais.** Enfileira e volta em ~0,3 s; antes
+  prendia a conexão pelo lote inteiro e estourava o timeout com 30 vídeos.
+- **Concorrência pelo tipo de encoder.** GPU (QSV/NVENC/AMF) tem circuito
+  dedicado: 2 em paralelo quase dobram a vazão. O `libx264` já usa todos os
+  núcleos sozinho, então fica em 1 — dois só disputariam a mesma CPU.
+  Ajustável por `EDITOR_EXPORT_CONCURRENCY` (1 a 4).
+- **Medido:** 3 vídeos (~4,5 min de conteúdo) em 42 s com `h264_qsv`, 2 em
+  paralelo. ~6,5× tempo real.
+
+### O formato
+
+As plataformas recomprimem tudo que recebem; o arquivo exportado é a
+matéria-prima dessa recompressão. O preset mira qualidade alta e
+compatibilidade máxima, não tamanho mínimo.
+
+| Parâmetro | Valor | Por quê |
+| --- | --- | --- |
+| Vídeo | H.264 High @ 4.1, yuv420p | Todo celular decodifica |
+| Resolução | 1080×1920, 30 fps constante | 9:16; VFR dessincroniza áudio na recompressão |
+| Bitrate | ~10 Mbps, teto 12 Mbps | Acima disso não sobra ganho visível após a recompressão |
+| Keyframe | a cada 2 s | Regular para o corte e o seek da plataforma |
+| Cor | BT.709 marcada em cada frame | Sem a tag, alguns celulares mostram lavado |
+| Áudio | AAC-LC 192 kbps, 48 kHz, estéreo | |
+| Container | MP4 com `+faststart` | O processamento começa antes do upload terminar |
+
+Os valores são escolha de engenharia sobre o que as plataformas publicam.
+Revise se as recomendações delas mudarem.
+
+### Três defeitos que só o teste real pegou
+
+**1. Cópias separadas do módulo no Next.js.** O `instrumentation` e as rotas
+de API carregam cada um sua cópia de `exportQueue.ts` e `export.ts`. O worker
+rodava numa cópia; a rota consultava outra, vazia. Sintomas: a API mostrava
+`encoder: null, concurrency: 1` e **o cancelamento devolvia `false` com o
+render seguindo até o fim**. Corrigido guardando o estado em `globalThis`,
+compartilhado entre as cópias.
+
+**2. Cor sem tag no QSV.** As flags `-color_primaries`/`-color_trc` de saída
+não chegavam ao bitstream: o `ffprobe` mostrava `unknown`. Corrigido marcando a
+cor em cada frame com `setparams` no filter graph.
+
+**3. Nível 4.0 em vez de 4.1.** O QSV lê o nível pela opção genérica do FFmpeg,
+que é inteira: `4.1` virava 4. Corrigido passando `41`, conferido no QSV e no
+libx264.
+
+### Outros detalhes
+
+- **Claim atômico:** ler o próximo job e marcá-lo como `processing` numa
+  transação, para nunca renderizar o mesmo vídeo duas vezes.
+- **Nome de saída reservado na hora:** com exports em paralelo, dois jobs do
+  mesmo vídeo escolheriam o mesmo nome. O `.processing` é criado vazio no
+  momento da escolha e conta como ocupado.
+- **Retomada (§112):** ao subir, jobs em `processing` voltam para `pending` e
+  `.processing` órfãos são apagados — só na pasta de saída, só essa extensão.
+- **Progresso gravado só quando o inteiro muda:** o FFmpeg manda várias linhas
+  por segundo.
+- **Progresso não ressuscita job cancelado:** a atualização só vale para quem
+  ainda está em `processing`.
+- **Corrigido de passagem:** `updateEditorJobStatus` tinha o `COALESCE` de
+  `started_at` invertido e reescrevia a hora de início a cada atualização.
+
+### Verificação
+
+| O quê | Resultado |
+| --- | --- |
+| `npm run typecheck` | ✅ exit 0 |
+| `npm test` | ✅ 239/239 (20 novos) |
+| Enfileirar responde na hora | ✅ ~0,3 s |
+| 2 em paralelo, o 3º entra quando abre vaga | ✅ |
+| Cancelar job em andamento | ✅ depois da correção do `globalThis` |
+| Nenhum `.processing` após cancelar | ✅ |
+| `ffprobe` da saída | ✅ High · 1080×1920 · 30/1 CFR · ~10 Mbps · AAC-LC 48 kHz estéreo · moov no início |
+
+---
+
+## Fase 8.1 — Revisão e alinhamento · ✅ 2026-09-29
+
+Revisão do módulo inteiro contra o uso real, pedida pelo usuário depois da
+Fase 8. Detalhes e motivos no `HISTORICO.md`, §20.
+
+### Defeitos corrigidos
+
+| Defeito | Efeito para o usuário | Correção |
+| --- | --- | --- |
+| A exportação usava o template aberto no painel para o lote inteiro | O template **aplicado** a cada vídeo era ignorado em silêncio | `enqueueExports` resolve o template por vídeo; o do painel só vale para quem não tem. A aba Preview segue a mesma regra |
+| A detecção em lote mandava todos os vídeos num pedido só | "Selecionar todos" com mais de 50 vídeos dava erro; sem progresso | Pacotes de 10, com "Analisando 20 de 98…" |
+| Template editado e não salvo | A exportação usava a versão antiga sem aviso | Selo "alterações não salvas"; aviso de recorte não aplicado na aba Preview |
+| Cache de encoder por cópia de módulo | Cada contexto testava os encoders de novo | Cache no `globalThis`; a rota de status reusa o teste da fila |
+
+### Limpeza
+
+- Removidos: a rota `/api/editor/videos` (sem chamador) e as funções de job que
+  a fila substituiu (`listPendingEditorJobs`, `listEditorJobsByVideo`,
+  `deleteEditorJob`).
+- Arquivos de teste que eu havia gerado em `data/output/` e os jobs deles foram
+  apagados; os exportados pelo usuário ficaram.
+
+### Testes
+
+`tests/editorJobs.test.ts` (13): claim atômico, hora de início preservada,
+progresso que não ressuscita job cancelado, retomada após reinício, regra do
+template por vídeo, nome de saída. O teste da hora de início foi conferido
+contra o defeito original: reintroduzido o `COALESCE` invertido, ele falha.
+
+### Verificação
+
+| O quê | Resultado |
+| --- | --- |
+| `npm run typecheck` | ✅ |
+| `npm test` | ✅ 259/259 |
+| `npm run build` | ✅ |
+| Exportação pelo caminho real, conferida no `ffprobe` | ✅ nível 4.1; primaries, transfer e colorspace BT.709 |
+| Template do painel "pronto" × vídeo com "novo" aplicado | ✅ o job saiu com "novo" |
+
+---
+
+## Fase 10 — Texto (CTA) e áudio · ✅ 2026-09-29
+
+**Aceite (§105):** texto, CTA, áudio, música, volume e mixagem. ✅
+
+É a fase que junta as duas metades do produto: a análise gera o CTA, e agora
+ele sai **desenhado sobre o vídeo exportado**.
+
+### A decisão central: o texto é desenhado pelo navegador
+
+A spec (§34) oferece `drawtext`, libass ou "gerar layer PNG temporária", e manda
+priorizar a consistência entre preview e exportação. O caminho escolhido foi o
+PNG desenhado **no navegador**, pela mesma função (`drawTextLayer`) que desenha
+o preview:
+
+| `drawtext` do FFmpeg | Camada PNG do navegador |
+| --- | --- |
+| Fonte do FFmpeg ≠ fonte do navegador: as linhas quebram em lugares diferentes | Mesma fonte, mesma quebra — o PNG é o preview |
+| Não desenha emoji colorido — e os CTAs gerados usam emoji ("⚠️ A SORTE…") | Emoji sai como na tela |
+| Não quebra linha sozinho | `layoutText` quebra e diminui a fonte até caber |
+| Escape de `:`, `'`, `%`, `\` notoriamente traiçoeiro | Nenhum texto entra no comando do FFmpeg |
+
+Ao exportar, o navegador desenha a camada de cada vídeo, envia
+(`/api/editor/text-layer`) e só então enfileira; o job guarda o nome da camada,
+como já guardava o recorte.
+
+### O que entrou
+
+- **Estilo no template:** caixa arrastável (terceiro alvo do seletor, ao lado de
+  vídeo e logo), fonte do sistema ou TTF/OTF enviada, negrito, maiúsculas,
+  alinhamento, tamanho máximo e mínimo (a fonte encolhe até caber), entrelinha,
+  cor, contorno, faixa atrás do texto, e janela de exibição com fade de entrada
+  e de saída (§35).
+- **Conteúdo por vídeo:** o CTA da análise pela mesma regra da Fila (editado →
+  escolhido), com a recomendação como último recurso e a origem indicada na
+  tela. Na aba Preview dá para trocar o texto de um vídeo sem mexer na escolha
+  da Fila.
+- **Áudio (§36-§37):** original, mudo, substituir pela música ou misturar, com
+  volume de cada um (0–200 %). A música entra em loop e é cortada no fim do
+  vídeo.
+- **Upload de assets** passou a aceitar fontes e músicas, reconhecidas pelos
+  bytes; o campo diz o que espera, e uma música enviada no lugar da logo é
+  recusada. A música é conferida com `ffprobe` antes de ser aceita.
+
+### Dois defeitos antigos que os testes desta fase acharam
+
+**1. Vídeo sem áudio nunca terminava de exportar.** Um overlay só termina quando
+todas as entradas terminam, e o fundo (cor ou imagem) nunca termina. Nos vídeos
+com áudio, o `-shortest` sobre o áudio disfarçava. Medido: um clipe de 4 s sem
+áudio foi morto por timeout aos 25 s. O modo "mudo" desta fase teria disparado
+isso em **todos** os vídeos. Correção: toda imagem entra em loop, todo overlay
+usa `shortest=1`, e o vídeo é a única fonte finita.
+
+**2. 23 dos 98 vídeos saíam com a cor errada.** Eles vêm em BT.601; a Fase 8
+passou a *etiquetar* a saída como BT.709 sem *converter* os dados. Medido em
+barras de cor: verde (14, 222, 4) saía (0, 189, 0), e o fundo vermelho saía
+laranja. Correção: cada entrada (vídeo, fundo, overlay, logo, texto) é
+convertida para BT.709 antes do overlay. Vídeo sem matriz declarada segue a
+convenção dos players (HD = BT.709, abaixo de 720p = BT.601).
+
+### Verificação
+
+| O quê | Resultado |
+| --- | --- |
+| `npm run typecheck` · `npm run build` | ✅ |
+| `npm test` | ✅ 304/304 |
+| Renderizador de produção, 4 cenários (sem áudio + mudo; mistura; substituir; sem áudio + original) | ✅ todos terminam no fim do vídeo |
+| Texto com janela 0,5–3 s e fades, medido pixel a pixel | ✅ invisível → entra → cheio → sai → invisível |
+| Cor: origem BT.601 e BT.709 contra a referência | ✅ verde 12,220,2 nas duas; fundo 251,0,0 |
+| Rotas novas pelo app rodando | ✅ texto próprio, upload de camada, recusa de tipo errado |
+
+**Não verificado:** o desenho do texto no navegador (canvas, fontes, emoji), o
+arraste da caixa de texto e a exportação completa disparada pela tela. A
+mecânica do lado do FFmpeg foi medida com uma camada PNG de teste.
+
+### 10.1 — Texto editável no painel e salvamento automático (2026-09-29)
+
+Pedido do usuário: ao ligar "Mostrar o CTA sobre o vídeo", poder editar o texto
+ali mesmo, e toda alteração já ficar salva e aparecer no preview na hora.
+
+- **Campo de texto na seção "Texto (CTA)"** do painel de template, ligado ao
+  vídeo aberto. É o mesmo rascunho do campo da aba Preview: os dois ficam em
+  sincronia. Vazio = volta ao CTA da análise (mostrado como placeholder).
+- **Texto salvo sozinho** 500 ms depois da última tecla. O rascunho guarda de
+  qual vídeo é: ao trocar de vídeo há um render com o texto do anterior, e sem
+  essa marca o autosave o gravaria no vídeo novo.
+- **Template salvo sozinho** 500 ms depois da última alteração. O botão
+  "Salvar" saiu; ficou "Criar template" para o template novo, e um indicador
+  "salvando… / ✓ salvo / não salvo". O mesmo conteúdo nunca é enviado duas
+  vezes seguidas, e erro de validação não tenta de novo em laço — espera a
+  próxima alteração.
+- **Aba Preview em tempo real:** quando o vídeo usa o template aberto no painel,
+  ela desenha o rascunho, sem esperar o salvamento.
+- **A exportação espera o salvamento:** com template salvando ou com erro, ela
+  recusa e explica. A fila lê o template salvo, e sem isso sairia com a versão
+  anterior à que o preview mostrava.
+
+**Não verificado:** o comportamento na tela (digitação, salvamento, preview).
+
+### Limitações conhecidas
+
+- O preview não toca a música.
+- O último quadro do vídeo (33 ms) se perde no encerramento pelo `shortest=1`.
+- Apagar o texto próprio volta ao CTA; para um vídeo sair **sem** texto, use um
+  template sem texto.
+
+---
+
 ## Dívidas do módulo
 
 | Item | Onde | Impacto |
 | --- | --- | --- |
-| `/api/editor/videos` não tem chamador | `src/app/api/editor/videos/route.ts` | Baixo — 77 linhas quase idênticas a `/library`; apagar |
 | `/api/editor/import` sem interface desde a Fase 5.1 | `src/app/api/editor/import/route.ts` | Baixo — mantida de propósito; o pedido foi "por enquanto" |
 | Import manual carrega o vídeo inteiro em RAM | `src/app/api/editor/import/route.ts` | Médio — corrigir antes de religar a interface |
-| Tabelas `editor_templates` e `editor_jobs` ainda sem uso | `schema.ts` | Baixo — esperado; entram nas Fases 5 e 8 |
-| Sem teste de UI | — | Médio — a geometria tem teste, a interação não |
+| `source_profiles` e seu CRUD sem uso | `schema.ts`, `editorRepo.ts` | Baixo — base da Fase 9 |
+| Sem teste de interface | — | Médio — geometria, fila e formato têm teste; arrastar, clicar e tocar vídeo só foram conferidos pelo usuário |

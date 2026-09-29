@@ -7,6 +7,7 @@ data/uploads/
 data/artifacts/
 data/templates/
 data/output/
+data/text-layers/
 data/*.db
 data/*.db-*
 data/*.sqlite

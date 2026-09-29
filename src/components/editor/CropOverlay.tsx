@@ -15,10 +15,12 @@ const HANDLES: Array<{ dir: CropDirection; className: string; cursor: string }> 
 ];
 
 /**
- * Retangulo de recorte sobre o video, em coordenadas normalizadas (0..1).
+ * Retangulo arrastavel em coordenadas normalizadas (0..1).
  *
- * Trabalha em fracao, nao em pixel, porque o mesmo recorte precisa valer para
- * o preview reduzido e para o arquivo em 1080x1920 (spec §24).
+ * Serve a tres usos com o mesmo gesto: o recorte sobre o video, a area do
+ * video no template e a logo. Trabalha em fracao, nao em pixel, porque o mesmo
+ * retangulo precisa valer para o preview reduzido e para o arquivo em
+ * 1080x1920 (spec §24).
  */
 export default function CropOverlay({
   rect,

@@ -22,8 +22,14 @@ const MODE_TO_ENCODER: Record<Exclude<EncoderMode, "auto">, string> = {
   cpu: "libx264",
 };
 
-/** O teste custa alguns segundos e a resposta não muda durante a execução. */
-const cache = new Map<string, boolean>();
+/**
+ * O teste custa alguns segundos e a resposta nao muda durante a execucao.
+ *
+ * No `globalThis` pelo mesmo motivo da fila: o Next.js carrega uma copia deste
+ * modulo por contexto, e com um Map por copia cada rota testava tudo de novo.
+ */
+const globalRef = globalThis as unknown as { __editorEncoderCache?: Map<string, boolean> };
+const cache = (globalRef.__editorEncoderCache ??= new Map<string, boolean>());
 
 export async function encoderWorks(name: string): Promise<boolean> {
   const cached = cache.get(name);

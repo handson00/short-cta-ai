@@ -353,9 +353,11 @@ export function buildCommentCtaUserMessage(
 // ------------------------- Kit de publicacao --------------------------------
 
 /**
- * Regras apuradas em 2026-09-18 (fontes no HANDOFF, §11). Estao aqui porque
- * cada uma muda o texto gerado, e sem o motivo registrado a proxima pessoa
- * "melhora" o prompt e desfaz a razao de ser dele:
+ * Regras apuradas em 2026-09-18. As fontes originais nao ficaram registradas;
+ * o resumo da pesquisa esta em docs/arquivo/DEPLOYMENT_SUMMARY.md ("Phase 5").
+ * Sao regras de plataforma que mudam com o tempo: revalide antes de mexer.
+ * Estao aqui porque cada uma muda o texto gerado, e sem o motivo registrado a
+ * proxima pessoa "melhora" o prompt e desfaz a razao de ser dele:
  *
  * - Envio em DM e o sinal mais forte (Mosseri), de 3 a 5x o peso da curtida.
  *   Comentario esta ABAIXO de tempo de exibicao e de envio na hierarquia. Uma

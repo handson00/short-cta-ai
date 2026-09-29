@@ -1,4 +1,4 @@
-import { db, newId, nowIso, parseJson, toBool } from "./db";
+import { db, newId, nowIso, parseJson } from "./db";
 import type {
   EditorCrop,
   EditorJob,
@@ -194,6 +194,17 @@ export function setVideoTemplate(videoIds: string[], templateId: string | null):
   return apply(videoIds);
 }
 
+/** Template aplicado a cada vídeo (`null` = nenhum), na mesma ordem pedida. */
+export function getVideoTemplateIds(videoIds: string[]): Map<string, string | null> {
+  const stmt = db().prepare("SELECT template_id FROM editor_videos WHERE video_id = ?");
+  const out = new Map<string, string | null>();
+  for (const id of videoIds) {
+    const row = stmt.get(id) as { template_id: string | null } | undefined;
+    out.set(id, row?.template_id ?? null);
+  }
+  return out;
+}
+
 export function removeVideoFromEditor(videoId: string): void {
   db().prepare("DELETE FROM editor_videos WHERE video_id = ?").run(videoId);
 }
@@ -203,6 +214,41 @@ export function listEditorVideoIds(): string[] {
     .prepare("SELECT video_id FROM editor_videos ORDER BY added_at DESC")
     .all() as Array<{ video_id: string }>;
   return rows.map((r) => r.video_id);
+}
+
+// ========================= TEXTO PRÓPRIO DO VÍDEO ===========================
+
+/** Grava (ou, com texto vazio/nulo, apaga) o texto próprio de um vídeo. */
+export function setVideoTextOverride(videoId: string, text: string | null): void {
+  const clean = text?.trim() ?? "";
+  if (!clean) {
+    db().prepare("DELETE FROM editor_video_texts WHERE video_id = ?").run(videoId);
+    return;
+  }
+  db()
+    .prepare(
+      `INSERT INTO editor_video_texts (video_id, text, updated_at) VALUES (?, ?, ?)
+       ON CONFLICT(video_id) DO UPDATE SET text = excluded.text, updated_at = excluded.updated_at`,
+    )
+    .run(videoId, clean, nowIso());
+}
+
+/**
+ * Camadas de texto que um job ainda vai ler.
+ *
+ * Quem apaga versões antigas de camada consulta isto antes: um job pendente
+ * que perdesse a camada sairia sem texto, ou falharia no meio do lote.
+ */
+export function textLayerFilesInUse(): Set<string> {
+  const rows = db()
+    .prepare("SELECT export_json FROM editor_jobs WHERE status IN ('pending', 'processing')")
+    .all() as Array<{ export_json: string }>;
+  const out = new Set<string>();
+  for (const r of rows) {
+    const layer = parseJson<{ textLayer?: string | null }>(r.export_json, {}).textLayer;
+    if (layer) out.add(layer);
+  }
+  return out;
 }
 
 // =========================== RECORTE POR VÍDEO ==============================
@@ -375,23 +421,6 @@ export function getEditorJob(id: string): EditorJob | null {
   return row ? mapJob(row) : null;
 }
 
-export function listEditorJobsByVideo(videoId: string): EditorJob[] {
-  const rows = db()
-    .prepare("SELECT * FROM editor_jobs WHERE video_id = ? ORDER BY created_at DESC")
-    .all(videoId) as JobRow[];
-  return rows.map(mapJob);
-}
-
-export function listPendingEditorJobs(limit: number = 10): EditorJob[] {
-  const rows = db()
-    .prepare(
-      `SELECT * FROM editor_jobs WHERE status IN ('pending', 'analyzing', 'ready')
-       ORDER BY created_at ASC LIMIT ?`,
-    )
-    .all(limit) as JobRow[];
-  return rows.map(mapJob);
-}
-
 export function updateEditorJobStatus(
   id: string,
   status: EditorJobStatus,
@@ -402,9 +431,11 @@ export function updateEditorJobStatus(
   const completed = ["completed", "failed", "cancelled"].includes(status) ? now : undefined;
   db()
     .prepare(
+      // started_at/completed_at: o valor já gravado vence. Na ordem inversa,
+      // cada atualização de progresso reescrevia a hora de início.
       `UPDATE editor_jobs SET status = ?, progress = COALESCE(?, progress),
         output_path = COALESCE(?, output_path), error_message = COALESCE(?, error_message),
-        started_at = COALESCE(?, started_at), completed_at = COALESCE(?, completed_at)
+        started_at = COALESCE(started_at, ?), completed_at = COALESCE(completed_at, ?)
        WHERE id = ?`,
     )
     .run(
@@ -418,6 +449,124 @@ export function updateEditorJobStatus(
     );
 }
 
-export function deleteEditorJob(id: string): void {
-  db().prepare("DELETE FROM editor_jobs WHERE id = ?").run(id);
+// ========================== FILA DE EXPORTAÇÃO ==============================
+
+/**
+ * Pega o próximo job pendente e o marca como em processamento, numa transação.
+ *
+ * Ler e marcar em dois passos soltos deixaria dois workers pegarem o mesmo
+ * job — e o mesmo vídeo seria renderizado duas vezes.
+ */
+export function claimNextEditorJob(): EditorJob | null {
+  return db().transaction(() => {
+    const row = db()
+      .prepare("SELECT * FROM editor_jobs WHERE status = 'pending' ORDER BY created_at ASC LIMIT 1")
+      .get() as JobRow | undefined;
+    if (!row) return null;
+    db()
+      .prepare(
+        "UPDATE editor_jobs SET status = 'processing', progress = 0, started_at = ? WHERE id = ?",
+      )
+      .run(nowIso(), row.id);
+    return mapJob({ ...row, status: "processing", progress: 0 });
+  })();
+}
+
+/** Progresso só vale para job em andamento: não ressuscita um job cancelado. */
+export function updateEditorJobProgress(id: string, progress: number): void {
+  db()
+    .prepare("UPDATE editor_jobs SET progress = ? WHERE id = ? AND status = 'processing'")
+    .run(progress, id);
+}
+
+/** Cancela um job que ainda não começou. Devolve se havia algo para cancelar. */
+export function cancelPendingEditorJob(id: string): boolean {
+  return (
+    db()
+      .prepare(
+        "UPDATE editor_jobs SET status = 'cancelled', completed_at = ? WHERE id = ? AND status = 'pending'",
+      )
+      .run(nowIso(), id).changes > 0
+  );
+}
+
+export function cancelAllPendingEditorJobs(): number {
+  return db()
+    .prepare("UPDATE editor_jobs SET status = 'cancelled', completed_at = ? WHERE status = 'pending'")
+    .run(nowIso()).changes;
+}
+
+export function listProcessingEditorJobIds(): string[] {
+  return (
+    db().prepare("SELECT id FROM editor_jobs WHERE status = 'processing'").all() as Array<{ id: string }>
+  ).map((r) => r.id);
+}
+
+/**
+ * Jobs que estavam rodando quando o servidor caiu voltam para a fila (§112).
+ *
+ * O FFmpeg morreu junto com o processo, então nada está de fato em andamento;
+ * deixar como "processing" travaria o job para sempre.
+ */
+export function requeueInterruptedEditorJobs(): number {
+  return db()
+    .prepare(
+      "UPDATE editor_jobs SET status = 'pending', progress = 0, started_at = NULL WHERE status = 'processing'",
+    )
+    .run().changes;
+}
+
+export interface EditorJobView {
+  id: string;
+  videoId: string;
+  videoName: string;
+  status: EditorJobStatus;
+  progress: number;
+  outputPath: string | null;
+  errorMessage: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+}
+
+/** Jobs recentes para a tela, com o nome do vídeo já resolvido. */
+export function listRecentEditorJobs(limit = 200): EditorJobView[] {
+  const rows = db()
+    .prepare(
+      `SELECT j.id, j.video_id, v.original_name, j.status, j.progress, j.output_path,
+              j.error_message, j.created_at, j.started_at, j.completed_at
+       FROM editor_jobs j JOIN videos v ON v.id = j.video_id
+       ORDER BY j.created_at DESC LIMIT ?`,
+    )
+    .all(limit) as Array<{
+    id: string;
+    video_id: string;
+    original_name: string;
+    status: string;
+    progress: number;
+    output_path: string | null;
+    error_message: string | null;
+    created_at: string;
+    started_at: string | null;
+    completed_at: string | null;
+  }>;
+  return rows.map((r) => ({
+    id: r.id,
+    videoId: r.video_id,
+    videoName: r.original_name,
+    status: r.status as EditorJobStatus,
+    progress: r.progress,
+    outputPath: r.output_path,
+    errorMessage: r.error_message,
+    createdAt: r.created_at,
+    startedAt: r.started_at,
+    completedAt: r.completed_at,
+  }));
+}
+
+/** Tira da lista os jobs que já terminaram; os arquivos gerados ficam no disco. */
+export function clearFinishedEditorJobs(): number {
+  return db()
+    .prepare("DELETE FROM editor_jobs WHERE status IN ('completed', 'failed', 'cancelled')")
+    .run().changes;
 }

@@ -301,6 +301,57 @@ export interface EditorTemplateConfig {
   logoY?: number;
   logoWidth?: number;
   logoHeight?: number;
+  /** Camada de texto (o CTA sobre o vídeo). Ausente = sem texto. */
+  text?: EditorTextStyle;
+  /** Trilha de áudio. Ausente = áudio original. */
+  audio?: EditorTemplateAudio;
+}
+
+/**
+ * Estilo e caixa do texto. O conteúdo é de cada vídeo; o estilo é do template.
+ *
+ * O texto é desenhado pelo navegador numa camada PNG e o FFmpeg só a sobrepõe:
+ * a mesma função desenha o preview e o arquivo exportado, então os dois ficam
+ * idênticos — inclusive com emoji, que o `drawtext` do FFmpeg não desenha.
+ */
+export interface EditorTextStyle {
+  enabled: boolean;
+  /** Caixa onde o texto é quebrado e centralizado, em pixels do canvas. */
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  /** Nome da família CSS; com `fontFile`, é o nome registrado para a fonte enviada. */
+  fontFamily: string;
+  /** Fonte TTF/OTF enviada (nome do asset). */
+  fontFile?: string;
+  bold: boolean;
+  /** O texto começa neste tamanho e diminui até caber na caixa. */
+  maxFontSize: number;
+  minFontSize: number;
+  lineHeight: number;
+  align: "left" | "center" | "right";
+  uppercase: boolean;
+  color: string;
+  strokeColor: string;
+  strokeWidth: number;
+  /** Faixa atrás do texto; ausente = sem faixa. */
+  boxColor?: string;
+  boxOpacity?: number;
+  /** Janela de exibição em segundos (§35). `end` nulo = até o fim. */
+  start: number;
+  end: number | null;
+  fadeIn: number;
+  fadeOut: number;
+}
+
+export interface EditorTemplateAudio {
+  /** §36: manter, silenciar, trocar pela música ou misturar os dois. */
+  mode: "original" | "mute" | "replace" | "mix";
+  /** Asset de áudio enviado. Obrigatório em replace/mix. */
+  music?: string;
+  originalVolume: number;
+  musicVolume: number;
 }
 
 export interface SourceProfile {
@@ -355,6 +406,11 @@ export interface EditorExportSettings {
   audioCodec: string;
   bitrate?: number;
   encoderMode: "auto" | "nvenc" | "qsv" | "amf" | "cpu";
+  /**
+   * Camada de texto renderizada para este job (arquivo em `textLayersDir`),
+   * fotografada ao enfileirar como o recorte. Nula = vídeo sai sem texto.
+   */
+  textLayer?: string | null;
 }
 
 export interface EditorSystemStatus {

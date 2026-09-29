@@ -210,6 +210,21 @@ CREATE TABLE IF NOT EXISTS post_comments (
 
 CREATE INDEX IF NOT EXISTS idx_post_comments_video ON post_comments(video_id, position);
 
+-- Pedidos de captura de comentarios que a extensao consome por polling.
+-- O indice unico "um pedido aberto por video" e criado em db.ts, depois de
+-- remover as duplicatas de bancos antigos: criado aqui, falharia neles.
+CREATE TABLE IF NOT EXISTS capture_queue (
+  id TEXT PRIMARY KEY,
+  video_id TEXT NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+  url TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  completed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_capture_queue_status ON capture_queue(status);
+
 CREATE TABLE IF NOT EXISTS publish_kits (
   video_id TEXT PRIMARY KEY REFERENCES videos(id) ON DELETE CASCADE,
   description TEXT NOT NULL,
@@ -273,6 +288,14 @@ CREATE TABLE IF NOT EXISTS editor_videos (
   video_id TEXT PRIMARY KEY REFERENCES videos(id) ON DELETE CASCADE,
   added_at TEXT NOT NULL,
   template_id TEXT REFERENCES editor_templates(id) ON DELETE SET NULL
+);
+
+-- Texto próprio do vídeo no editor. Sem linha aqui, o vídeo usa o CTA da
+-- análise; com linha, este texto vence — sem tocar na escolha feita na Fila.
+CREATE TABLE IF NOT EXISTS editor_video_texts (
+  video_id TEXT PRIMARY KEY REFERENCES videos(id) ON DELETE CASCADE,
+  text TEXT NOT NULL,
+  updated_at TEXT NOT NULL
 );
 
 -- Recorte por vídeo. Guardado em coordenadas normalizadas (0..1) para o mesmo

@@ -1,12 +1,17 @@
 # Short CTA AI
 
 > **Continuando este projeto?** Leia `docs/HANDOFF.md` primeiro: estado real,
-> o que está quebrado e o próximo passo. O histórico das decisões está em
-> `docs/HISTORICO.md` e as fases em `docs/ROADMAP.md`.
+> pendências e o próximo passo. O histórico das decisões está em
+> `docs/HISTORICO.md`, as fases da análise em `docs/ROADMAP.md` e as do editor
+> em `docs/video-editor/`.
 
-Esteira de preparação de Shorts: importa vídeos curtos em lote, analisa cada um
-e sugere textos-gancho para aparecer acima do vídeo. Implementa a **Fase 1** da
-especificação, no formato **local, usuário único**.
+Esteira de preparação de Shorts, **local e de usuário único**, em duas fases:
+
+1. **Análise** — importa vídeos curtos em lote, analisa cada um e sugere
+   textos-gancho para aparecer acima do vídeo.
+2. **Edição** (`/editor`) — recorta a região útil (manual ou automático),
+   aplica um template próprio (fundo, logo) e exporta em massa em MP4 pronto
+   para Reels e TikTok.
 
 Neste projeto, "CTA" é o texto-gancho exibido sobre o vídeo — não uma chamada
 para clicar em um botão.
@@ -37,6 +42,25 @@ para clicar em um botão.
 - Exportação em CSV e JSON, com escape de vírgulas, aspas, quebras de linha e
   neutralização de conteúdo que uma planilha interpretaria como fórmula.
 - Página de uso da IA: requisições, modelo, tempo, status e erros recentes.
+
+### Editor de vídeos
+
+- Vídeos entram pela Fila com "Enviar para edição" — a promoção é explícita.
+- Recorte manual e **Smart Crop**: detecta a região do filme dentro da moldura
+  de outra página pela variação entre frames, sem modelo de IA.
+- Templates montados na plataforma: cor ou imagem de fundo, logo posicionável,
+  encaixe FIT ou FILL. Cada vídeo sai com o template aplicado a ele.
+- **O CTA sai desenhado sobre o vídeo**, com fonte do sistema ou TTF/OTF
+  enviada, contorno, faixa e janela de tempo com fade. O texto é desenhado pelo
+  navegador — a mesma imagem do preview —, então quebra de linha e emoji saem
+  idênticos no arquivo.
+- **Áudio:** original, mudo, substituir pela música ou misturar, com volumes.
+- Aba **Preview** com a mesma composição que a exportação produz.
+- **Exportação em fila**: 2 em paralelo com encoder de GPU (NVENC, Quick Sync ou
+  AMF, com libx264 como garantia), progresso, cancelamento e retomada após
+  reinício. Saída H.264 High 1080×1920 30 fps, AAC 48 kHz, cor convertida para BT.709 e
+  `+faststart`, em `data/output/`. O arquivo de origem nunca é alterado e a
+  saída nunca sobrescreve outra.
 
 ## O que ficou de fora (Fases 2 e 3)
 
@@ -123,6 +147,15 @@ caminhos direto no `.env.local` usando barras normais:
 FFMPEG_PATH=C:/ffmpeg/bin/ffmpeg.exe
 FFPROBE_PATH=C:/ffmpeg/bin/ffprobe.exe
 TESSERACT_PATH=C:/Program Files/Tesseract-OCR/tesseract.exe
+```
+
+Na transcrição, aponte `FASTER_WHISPER_PYTHON` para o caminho completo do
+Python **onde o `faster-whisper` foi instalado**. Com mais de um Python na
+máquina, o errado deixa a transcrição desligada — e os vídeos são analisados
+sem o áudio. O `npm run doctor` testa exatamente esse Python.
+
+```
+FASTER_WHISPER_PYTHON=C:/Users/<você>/AppData/Local/Programs/Python/Python312/python.exe
 ```
 
 O gerador de vídeos de teste (`npm run fixtures`) é um script bash: rode pelo
@@ -224,6 +257,7 @@ tem precedência e sobrevive a uma nova análise.
 src/
   app/                 páginas e rotas de API
   components/          interface (dark mode, mobile-first)
+  components/editor/   interface do editor de vídeos
   lib/
     media/             FFmpeg, seleção de frames, hashing
     pipeline/          etapas, detecção de CTA, avaliação editorial, validação
@@ -232,11 +266,14 @@ src/
       transcription/   faster-whisper | none
       vision/          tesseract | none
       search/          http | none
-    queue.ts           fila persistente e worker
-    repo.ts            acesso ao banco
+    editor/            recorte, Smart Crop, template, filter graph, exportação
+    queue.ts           fila de análise e worker
+    repo.ts            acesso ao banco (análise)
+    editorRepo.ts      acesso ao banco (edição)
     settings.ts        preferências e credencial
 scripts/               worker separado, fixtures, mock do GhostCLI
-tests/                 105 testes (unitários e de integração)
+tests/                 304 testes (unitários e de integração)
+docs/                  handoff, histórico, roadmap, editor e arquivo de sessões antigas
 ```
 
 ### Entidades

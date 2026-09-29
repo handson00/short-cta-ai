@@ -4,6 +4,9 @@ import { db } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
+/** De onde veio o CTA que o vídeo vai mostrar. */
+type CtaSource = "editado" | "escolhido" | "recomendado" | null;
+
 interface LibraryVideo {
   id: string;
   originalName: string;
@@ -14,6 +17,9 @@ interface LibraryVideo {
   durationSeconds: number | null;
   hasCta: boolean;
   ctaText: string | null;
+  ctaSource: CtaSource;
+  /** Texto próprio definido no editor; vence o CTA da análise. */
+  textOverride: string | null;
   commentCount: number;
   hashtagCount: number;
   hasAnalysis: boolean;
@@ -29,6 +35,11 @@ interface LibraryVideo {
  * Todo dado agregado vem de subconsulta, nunca de `LEFT JOIN`: um vídeo
  * reanalisado tem várias linhas em `scene_analyses`, e o JOIN multiplicava o
  * vídeo por quantas análises ele tivesse — 98 vídeos apareciam como 109 cards.
+ *
+ * O CTA segue a mesma regra da Fila (`view.ts`): o texto editado, senão a
+ * sugestão escolhida. Só na falta das duas entra a recomendada pela análise —
+ * e a origem vai junto, para a tela não apresentar uma recomendação como se
+ * fosse escolha do usuário.
  */
 export async function GET() {
   if (!(await isAuthenticated())) {
@@ -46,10 +57,11 @@ export async function GET() {
          v.aspect_ratio,
          v.duration_seconds,
          (SELECT us.edited_text FROM user_selections us WHERE us.video_id = v.id LIMIT 1) AS edited_text,
-         (SELECT CASE WHEN us.chosen_cta_id IS NOT NULL OR us.edited_text IS NOT NULL THEN 1 ELSE 0 END
-            FROM user_selections us WHERE us.video_id = v.id LIMIT 1) AS has_selection,
+         (SELECT cs.text FROM user_selections us JOIN cta_suggestions cs ON cs.id = us.chosen_cta_id
+            WHERE us.video_id = v.id LIMIT 1) AS chosen_cta,
          (SELECT cs.text FROM cta_suggestions cs
             WHERE cs.video_id = v.id AND cs.is_recommended = 1 LIMIT 1) AS recommended_cta,
+         (SELECT t.text FROM editor_video_texts t WHERE t.video_id = v.id) AS text_override,
          (SELECT COUNT(*) FROM post_comments pc WHERE pc.video_id = v.id) AS comment_count,
          (SELECT json_array_length(pk.hashtags_json) FROM publish_kits pk
             WHERE pk.video_id = v.id LIMIT 1) AS hashtag_count,
@@ -71,8 +83,9 @@ export async function GET() {
     aspect_ratio: string | null;
     duration_seconds: number | null;
     edited_text: string | null;
-    has_selection: number | null;
+    chosen_cta: string | null;
     recommended_cta: string | null;
+    text_override: string | null;
     comment_count: number;
     hashtag_count: number | null;
     has_analysis: number;
@@ -80,22 +93,33 @@ export async function GET() {
     template_id: string | null;
   }>;
 
-  const videos: LibraryVideo[] = rows.map((r) => ({
-    id: r.id,
-    originalName: r.original_name,
-    thumbnailPath: r.thumbnail_path,
-    width: r.width,
-    height: r.height,
-    aspectRatio: r.aspect_ratio,
-    durationSeconds: r.duration_seconds,
-    hasCta: Boolean(r.has_selection || r.recommended_cta),
-    ctaText: r.edited_text ?? r.recommended_cta ?? null,
-    commentCount: r.comment_count,
-    hashtagCount: r.hashtag_count ?? 0,
-    hasAnalysis: Boolean(r.has_analysis),
-    status: r.job_status ?? "queued",
-    templateId: r.template_id,
-  }));
+  const videos: LibraryVideo[] = rows.map((r) => {
+    const [ctaText, ctaSource]: [string | null, CtaSource] = r.edited_text
+      ? [r.edited_text, "editado"]
+      : r.chosen_cta
+        ? [r.chosen_cta, "escolhido"]
+        : r.recommended_cta
+          ? [r.recommended_cta, "recomendado"]
+          : [null, null];
+    return {
+      id: r.id,
+      originalName: r.original_name,
+      thumbnailPath: r.thumbnail_path,
+      width: r.width,
+      height: r.height,
+      aspectRatio: r.aspect_ratio,
+      durationSeconds: r.duration_seconds,
+      hasCta: ctaText !== null,
+      ctaText,
+      ctaSource,
+      textOverride: r.text_override,
+      commentCount: r.comment_count,
+      hashtagCount: r.hashtag_count ?? 0,
+      hasAnalysis: Boolean(r.has_analysis),
+      status: r.job_status ?? "queued",
+      templateId: r.template_id,
+    };
+  });
 
   return NextResponse.json({ videos });
 }

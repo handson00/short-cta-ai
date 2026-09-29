@@ -779,6 +779,10 @@ Fluxo: UI → Backend (fila SQLite) → Extensão (polling) → TikTok → Inges
 
 ### Verificação end-to-end (2026-09-27)
 
+> **Correção em 2026-09-29:** esta validação estava errada. Os comentários que
+> chegaram vieram da captura disparada pelo popup, não da fila: a fila nunca
+> processou um pedido (0 tentativas em 196 linhas). Ver §20.
+
 - Usuário selecionou 98 vídeos na Fila e clicou em "Capturar comentários (98)".
 - Backend confirmou: `98 vídeo(s) adicionado(s) à fila de captura`.
 - Consulta via API (`GET /api/extension/pending-captures`) confirmou 98 itens
@@ -1420,3 +1424,271 @@ FFmpeg. A geometria, que é o que importa, vem da mesma função dos dois lados.
 Os vídeos exportados antes desta correção têm a logo esticada e precisam ser
 exportados de novo. Como o nome de saída nunca sobrescreve (§110), os antigos
 continuam na pasta — apague-os à mão se não quiser guardá-los.
+
+---
+
+## 19. Editor — Fase 8 (fila de exportação e formato para Reels/TikTok)
+
+Implementada em 2026-09-28. Pedido do usuário: exportar em massa, rápido, e no
+melhor formato para TikTok e Instagram.
+
+### Velocidade
+
+A exportação saiu de dentro da requisição HTTP. O POST enfileira um job por
+vídeo em `editor_jobs` e responde em ~0,3 s; um worker no processo do servidor
+consome a fila. Antes, a conexão ficava presa pelo lote inteiro e estourava o
+timeout com dezenas de vídeos.
+
+Concorrência pelo tipo de encoder: 2 em paralelo com GPU (circuito dedicado),
+1 com `libx264` (que já usa todos os núcleos sozinho). Medido: 3 vídeos,
+~4,5 min de conteúdo, em 42 s com `h264_qsv` — ~6,5× tempo real.
+
+### Formato
+
+Preset único em `lib/editor/exportPreset.ts`: H.264 High @ 4.1, 1080×1920,
+30 fps constante, ~10 Mbps com teto de 12, keyframe a cada 2 s, cor BT.709
+marcada, AAC-LC 192 kbps 48 kHz estéreo, MP4 com `+faststart`.
+
+A lógica: as plataformas recomprimem tudo que recebem, então o arquivo
+exportado é a matéria-prima dessa recompressão. Mira-se qualidade alta e
+compatibilidade máxima, não tamanho mínimo. São escolhas de engenharia sobre o
+que as plataformas publicam; revisar se as recomendações mudarem.
+
+### Três defeitos que só o teste real pegou
+
+**Cópias separadas do módulo no Next.js.** O `instrumentation` e as rotas de
+API carregam cada um sua cópia do mesmo arquivo. O worker rodava numa; a rota
+consultava outra, vazia. A API mostrava `encoder: null` e — o grave — **o
+cancelamento devolvia `false` e o render seguia até o fim**. Corrigido com o
+estado em `globalThis`.
+
+Regra que fica: **estado em memória que precisa ser visto pelo worker e pelas
+rotas vai no `globalThis`, nunca em variável solta de módulo.**
+
+**Cor sem tag no QSV.** As flags de cor na saída não chegavam ao bitstream;
+o `ffprobe` mostrava primaries e transfer como `unknown`. Corrigido com
+`setparams` no filter graph, que marca a cor em cada frame.
+
+**Nível 4.0 em vez de 4.1.** O QSV lê o nível por uma opção inteira: `4.1`
+virava 4. Corrigido passando `41`.
+
+Os três passariam em qualquer teste unitário. Só apareceram rodando o
+servidor de verdade e conferindo o arquivo no `ffprobe`.
+
+### Corrigido de passagem
+
+`updateEditorJobStatus` tinha `COALESCE(?, started_at)` com os argumentos
+invertidos: cada atualização de progresso reescrevia a hora de início.
+
+### Verificação
+
+Typecheck limpo, 239/239 testes (20 novos). Enfileirar responde na hora; 2
+renders em paralelo e o terceiro entra quando abre vaga; cancelar um render em
+andamento funciona e não deixa `.processing`; o `ffprobe` da saída confere com
+o preset.
+
+---
+
+## 20. Revisão geral e alinhamento (2026-09-29)
+
+Pedido do usuário: "faça as correções necessárias, de forma que fique tudo
+alinhado", agindo como engenheiro sênior. Em vez de partir da documentação, a
+revisão partiu dos dados reais — e eles contradisseram a documentação em vários
+pontos.
+
+### Verificado pelo caminho real
+
+A exportação da Fase 8, conferida no `ffprobe` depois das correções de cor e de
+nível: H.264 High **nível 4.1**, primaries/transfer/colorspace **BT.709**.
+
+### Editor: três defeitos de lógica
+
+1. **A exportação ignorava o template aplicado a cada vídeo.** Usava o template
+   aberto no painel para o lote inteiro. Quem aplicou templates diferentes a
+   grupos diferentes recebia tudo com um só. Agora cada vídeo sai com o seu; o
+   do painel vale para quem não tem. A aba Preview segue a mesma regra, e o
+   aviso depois de exportar diz quantos saíram com cada template. Conferido
+   pelo caminho real: com "pronto" no painel e "novo" aplicado, o job saiu com
+   "novo".
+2. **A detecção em lote estourava com mais de 50 vídeos** (limite da rota) e
+   não mostrava progresso. Agora vai em pacotes de 10.
+3. **Alterações não salvas eram invisíveis.** A exportação lê o template e o
+   recorte salvos; a tela agora avisa quando há mudança não salva.
+
+### Fila de captura de comentários: nunca funcionou
+
+Os dados mostraram 196 pedidos para 98 vídeos, **todos pendentes, com zero
+tentativas**. Dois defeitos independentes:
+
+- **No servidor,** `addToCaptureQueue` prometia ignorar vídeo já pedido com
+  `INSERT OR IGNORE`, mas sem índice único não havia o que ignorar: dois cliques
+  (às 18:34:02 e 18:34:54 de 27/09) enfileiraram cada vídeo duas vezes.
+  Corrigido com um índice único parcial (um pedido aberto por vídeo), criado
+  numa migração que antes remove as duplicatas. A tabela, que era criada de
+  improviso dentro do `repo.ts`, passou para o `schema.ts`.
+- **Na extensão,** o polling lia o token das chaves `ingestToken`/`apiBase`,
+  mas o popup grava `shortCtaToken`/`shortCtaUrl`. O token vinha sempre vazio e
+  o polling desistia em silêncio. Além disso usava `setInterval` num service
+  worker do Manifest V3, que o Chrome encerra quando ocioso. Corrigido: chaves
+  certas e `chrome.alarms` (permissão `alarms`, versão 1.1.0).
+
+A §8 deste histórico registrava o fluxo como "validado de ponta a ponta". Os
+comentários de 93 vídeos chegaram depois de a fila ser criada — mas pela
+captura disparada no popup, que usa as chaves certas. A validação confundiu os
+dois caminhos. É o padrão de sempre deste projeto: o sistema parecia funcionar
+porque outro caminho entregava o resultado.
+
+**Reconciliação dos dados:** depois da migração ficaram 98 pedidos. Para 93
+deles o banco prova que o pedido foi atendido (comentários capturados depois de
+o pedido existir); esses foram marcados como concluídos com a data real da
+captura. Deixá-los pendentes faria a extensão corrigida reabrir 98 posts do
+TikTok ao ser recarregada, repetindo capturas já feitas. Os 5 restantes (3 sem
+comentário nenhum, 2 capturados antes do pedido) continuam pendentes e serão
+processados quando a extensão for recarregada.
+
+**Não verificado:** a extensão corrigida num navegador.
+
+### Documentação que contradizia os dados
+
+| Afirmação | Realidade |
+| --- | --- |
+| "GhostCLI testado apenas contra o mock" | ~670 chamadas reais registradas, 1 erro |
+| "Reanalisar os 79 vídeos por causa do OCR" | Os 98 têm análise visual pós-correção; 65 com CTA detectado |
+| "Transcrição desligada, é o gargalo" | Ligada desde 28/09; 93 vídeos por reanalisar |
+| "Quase tudo do Instagram" | Os 98 vídeos atuais são do TikTok |
+| "`npm test` não carrega o `.env.local`" | Carrega, via `vitest.config.ts` |
+| "Nenhum teste cobre CRLF" | `tests/media.test.ts` cobre o parser do Tesseract |
+| "Comentários não entram em nenhum prompt" | Entram em quatro; todos via `untrusted()` (conferido) |
+| `prompts.ts`: "fontes no HANDOFF, §11" | Essa seção nunca existiu; o comentário agora diz onde está o resumo |
+
+`HANDOFF.md`, `ROADMAP.md`, `README.md`, a arquitetura e o plano do editor
+foram reescritos a partir dos dados.
+
+### Raiz do repositório
+
+Relatórios de sessões antigas estavam versionados na raiz e se contradiziam —
+o `BUILD_STATUS.md` e o `PROMPT_PARA_CONTINUAR.md` instruíam a "fazer o build
+funcionar", que funciona há dias. Foram movidos para `docs/arquivo/` com
+`git mv` (nada foi apagado), junto com a cópia antiga do handoff e os `.bat`
+da depuração de build. O `FUNCIONALIDADES_CTA_OTIMIZADO.md`, que documenta um
+recurso vivo, foi para `docs/`. Três `.log` de build versionados apesar do
+`*.log` no `.gitignore` saíram do índice (continuam no disco).
+
+### Testes
+
+259/259. Novos: `tests/editorJobs.test.ts` (13) e `tests/captureQueue.test.ts`
+(7) — este último monta um banco no formato antigo, com a duplicata, e confere
+a migração.
+
+### Limpeza de artefatos de teste
+
+Os MP4 que eu havia gerado nos testes das Fases 7 e 8 (~624 MB) e os jobs deles
+foram apagados. Ficaram os três exportados pelo usuário às 22:10 de 28/09. Na
+Fase 8 eu havia usado "Limpar lista", o que apagou também o registro (não os
+arquivos) das exportações anteriores do usuário.
+
+---
+
+## 21. Editor — Fase 10 (texto do CTA e áudio no vídeo)
+
+Implementada em 2026-09-29. É a fase que junta as duas metades do produto: a
+análise gera o CTA, e agora ele sai desenhado sobre o vídeo exportado — o
+texto-gancho "acima do vídeo" que dá nome ao projeto.
+
+### Por que o texto é desenhado pelo navegador
+
+O caminho óbvio seria o `drawtext` do FFmpeg. Foi descartado porque quebraria
+a regra que o projeto já pagou caro para aprender (a logo esticada da Fase 7):
+o preview precisa mostrar o que a exportação produz. Com `drawtext`, a fonte do
+FFmpeg quebra as linhas em lugar diferente da do navegador, emoji colorido não
+sai (os CTAs gerados usam emoji), nada quebra linha sozinho, e o escape de
+caracteres especiais é uma fonte conhecida de erro.
+
+Em vez disso, uma única função (`drawTextLayer`) desenha o texto num canvas.
+O preview é esse canvas; na exportação, o mesmo desenho vira um PNG enviado ao
+servidor, e o FFmpeg só sobrepõe a imagem. Nenhum texto do usuário entra no
+comando do FFmpeg.
+
+A quebra de linha e a redução de fonte até caber ficaram em `textLayout.ts`,
+uma função pura que recebe o medidor de largura — no navegador, o canvas; nos
+testes, um medidor falso. Por isso a regra é testável sem navegador.
+
+### O CTA que vai para o vídeo
+
+O editor usava "texto editado, senão o recomendado", ignorando a sugestão
+**escolhida** na Fila. Agora segue a mesma regra da Fila (`view.ts`): editado,
+senão escolhido; a recomendação da análise entra só por último, e a tela diz
+de onde o texto veio. Um texto próprio pode ser definido por vídeo no editor
+sem tocar na escolha da Fila.
+
+### Dois defeitos antigos, achados pelos testes desta fase
+
+**Vídeo sem áudio nunca terminava de exportar.** Antes de mexer no comando do
+FFmpeg, a estrutura existente foi testada caso a caso. Resultado: um overlay só
+termina quando todas as entradas terminam, e o fundo nunca termina. Nos vídeos
+com áudio, o `-shortest` sobre o áudio encerrava o arquivo e disfarçava o
+problema; num clipe de 4 s sem áudio, o render foi morto por timeout aos 25 s.
+O modo "mudo" desta fase teria travado a fila em todo vídeo. Nova regra, medida
+em todas as combinações: toda imagem entra em loop, todo overlay usa
+`shortest=1`, e o vídeo é a única fonte finita.
+
+**23 dos 98 vídeos saíam com a cor errada.** A medição do texto mostrou o fundo
+vermelho saindo laranja. Investigado a fundo: 23 vídeos do acervo são BT.601
+(`smpte170m`), e a Fase 8 passou a etiquetar a saída como BT.709 sem converter
+os dados. Em barras de cor, o verde (14, 222, 4) saía (0, 189, 0) — o próprio
+filme saía com a cor desviada, não só o fundo. Agora cada entrada é convertida
+para BT.709 antes do overlay; vídeo sem matriz declarada segue a convenção dos
+players. Medido depois: verde 12, 220, 2 nas origens BT.601 e BT.709; fundo
+251, 0, 0.
+
+A lição se repete: a Fase 8 conferiu as **etiquetas** no `ffprobe` e as deu por
+certas. Etiqueta certa sobre dado errado passa em qualquer verificação que só
+lê metadado. O que prova a cor é medir o pixel.
+
+### Teste instável corrigido de passagem
+
+Com a máquina carregada, o `beforeAll` dos testes de banco estourava o limite
+padrão de 10 s do Vitest e a suíte inteira era pulada. `hookTimeout` alinhado ao
+`testTimeout` (120 s) no `vitest.config.ts`.
+
+### Verificação
+
+Typecheck e build limpos; `npm test` 304/304. Renderizador de produção rodado
+contra mídia sintética numa pasta temporária: os quatro cenários de áudio
+terminam no fim do vídeo; o texto aparece e some na janela e nos fades medidos
+pixel a pixel; a cor confere com a referência. Rotas novas conferidas no app
+rodando, com os artefatos do teste removidos em seguida.
+
+**Não verificado:** o desenho do texto no navegador, o arraste da caixa e a
+exportação completa disparada pela tela.
+
+---
+
+## 22. Editor — texto editável no painel e salvamento automático (2026-09-29)
+
+Pedido do usuário logo depois da Fase 10: ao ligar "Mostrar o CTA sobre o
+vídeo", poder editar o texto ali mesmo, e toda alteração já ficar salva e
+aparecer no preview em tempo real.
+
+O campo de texto entrou na seção "Texto (CTA)" do painel de template, ligado ao
+vídeo aberto e sincronizado com o campo da aba Preview. Texto e template passam
+a ser salvos sozinhos meio segundo depois da última alteração; o botão "Salvar"
+deu lugar a um indicador de estado. A aba Preview desenha o rascunho do
+template aberto, sem esperar o salvamento.
+
+Três cuidados que não são óbvios:
+
+- **O rascunho de texto guarda de qual vídeo é.** Ao trocar de vídeo existe um
+  render em que o campo ainda tem o texto do anterior; sem essa marca, o
+  autosave o gravaria no vídeo novo.
+- **O autosave do template não entra em laço.** O mesmo conteúdo nunca é
+  enviado duas vezes seguidas, e um erro de validação (caixa fora do canvas,
+  por exemplo) mostra a mensagem e espera a próxima alteração em vez de
+  repetir o pedido.
+- **A exportação espera o salvamento.** Como o preview agora mostra o rascunho
+  e a fila lê o template salvo, exportar no meio de um salvamento sairia com a
+  versão anterior. Com salvamento pendente ou com erro, a exportação recusa e
+  explica.
+
+Typecheck, 304/304 testes e build limpos. O comportamento na tela não foi
+verificado.

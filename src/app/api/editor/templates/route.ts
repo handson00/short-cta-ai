@@ -12,6 +12,38 @@ import { validateTemplateConfig, DEFAULT_TEMPLATE } from "@/lib/editor/template"
 
 export const dynamic = "force-dynamic";
 
+const textSchema = z.object({
+  enabled: z.boolean(),
+  x: z.number().int().min(0),
+  y: z.number().int().min(0),
+  width: z.number().int().min(1),
+  height: z.number().int().min(1),
+  fontFamily: z.string().min(1).max(80),
+  fontFile: z.string().max(80).optional(),
+  bold: z.boolean(),
+  maxFontSize: z.number().int(),
+  minFontSize: z.number().int(),
+  lineHeight: z.number(),
+  align: z.enum(["left", "center", "right"]),
+  uppercase: z.boolean(),
+  color: z.string(),
+  strokeColor: z.string(),
+  strokeWidth: z.number(),
+  boxColor: z.string().optional(),
+  boxOpacity: z.number().optional(),
+  start: z.number(),
+  end: z.number().nullable().default(null),
+  fadeIn: z.number(),
+  fadeOut: z.number(),
+});
+
+const audioSchema = z.object({
+  mode: z.enum(["original", "mute", "replace", "mix"]),
+  music: z.string().max(80).optional(),
+  originalVolume: z.number(),
+  musicVolume: z.number(),
+});
+
 const configSchema = z.object({
   background: z.string().optional(),
   overlay: z.string().optional(),
@@ -28,6 +60,10 @@ const configSchema = z.object({
   logoY: z.number().int().min(0).optional(),
   logoWidth: z.number().int().min(2).optional(),
   logoHeight: z.number().int().min(2).optional(),
+  // Os limites de verdade (caixa dentro do canvas, cores, tempos) ficam em
+  // validateTemplateConfig, com mensagem em português para a tela.
+  text: textSchema.optional(),
+  audio: audioSchema.optional(),
 });
 
 const createSchema = z.object({

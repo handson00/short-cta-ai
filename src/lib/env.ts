@@ -30,6 +30,7 @@ export const env = {
   uploadsDir: path.join(dataDir, "uploads"),
   artifactsDir: path.join(dataDir, "artifacts"),
   templatesDir: path.join(dataDir, "templates"),
+  textLayersDir: path.join(dataDir, "text-layers"),
   outputDir: str("EDITOR_OUTPUT_DIR", path.join(dataDir, "output")),
   databasePath: str("DATABASE_PATH", path.join(dataDir, "short-cta-ai.db")),
 

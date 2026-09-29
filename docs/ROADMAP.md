@@ -1,6 +1,9 @@
 # Short CTA AI — Fases e o que falta
 
-Estado em 2026-09-18. Leia [`HANDOFF.md`](./HANDOFF.md) antes.
+Estado em 2026-09-29. Leia [`HANDOFF.md`](./HANDOFF.md) antes.
+
+Este roadmap cobre a **esteira de análise** (a Fila). O módulo de edição tem
+o seu próprio: [`video-editor/IMPLEMENTATION_PLAN.md`](./video-editor/IMPLEMENTATION_PLAN.md).
 
 Legenda: ✅ pronto e verificado · ⚠️ existe mas com ressalva · ❌ não feito
 
@@ -12,16 +15,15 @@ Legenda: ✅ pronto e verificado · ⚠️ existe mas com ressalva · ❌ não f
 | --- | --- | --- |
 | 0.1 | Colocar o projeto em git e commitar o estado atual | ✅ 2026-09-18 |
 | 0.2 | **Resolver o OCR no Windows** (`HANDOFF.md` §5.1) | ✅ 2026-09-18 — era CRLF no parser do TSV |
-| 0.3 | Instalar `faster-whisper` e ligar a transcrição | ❌ **agora é o gargalo** |
-| 0.4 | Testar o GhostCLI contra a API real, não o mock | ❌ |
-| 0.5 | Reanalisar os 79 vídeos já importados | ❌ foram processados com o OCR quebrado e estão com o campo vazio |
+| 0.3 | Instalar `faster-whisper` e ligar a transcrição | ✅ 2026-09-28 — o caminho do Python estava errado (`HANDOFF.md` §5.2) |
+| 0.4 | Testar o GhostCLI contra a API real, não o mock | ✅ em uso contra `https://ghostcli.dev/v1`: ~670 chamadas registradas, 1 erro |
+| 0.5 | Reanalisar o acervo depois da correção do OCR | ✅ os 98 vídeos têm análise visual pós-correção; 65 com CTA fixo detectado |
+| 0.7 | **Reanalisar os 93 vídeos que ficaram sem transcrição** | ❌ decisão do usuário — consome chamadas pagas do GhostCLI |
 
-Com o OCR funcionando, a IA já enxerga o texto da tela, mas continua surda. Para
-corte de filme o diálogo é o que define o conflito — 0.3 é uma instalação
-simples com ganho imediato, e é o melhor retorno por esforço agora.
-
-Ordem sugerida: 0.3, depois 0.5 (para o acervo refletir o que a ferramenta já
-sabe fazer), depois 0.4.
+A Fase 0 está cumprida, com uma pendência: os 93 vídeos analisados enquanto o
+Python da transcrição estava errado tiveram os CTAs gerados sem ouvir o diálogo.
+Para corte de filme, é o diálogo que define o conflito — reanalisar esses vídeos
+é o maior ganho de qualidade disponível hoje na esteira de análise.
 
 ---
 
@@ -101,36 +103,31 @@ Só faz sentido começar depois da Fase 0.
 
 | Item | Onde | Impacto |
 | --- | --- | --- |
-| `npm test` não carrega `.env.local` | `vitest.config.ts` | Médio — testes veem configuração diferente do app |
 | Testes de OCR usam só vídeos sintéticos | `tests/media.test.ts` | Médio — travam a lógica de classificação, não medem a qualidade do OCR no material real. Use `npm run cta:debug` num corte de verdade |
-| Nenhum teste cobre saída de binário com CRLF | `tests/` | Médio — foi esse o bug que custou dois dias; um teste de `parseTesseractTsv` com `\r\n` impediria a volta |
-| GhostCLI não verificado contra a API real | `src/lib/providers/ai/` | Alto se for para produção |
 | Nome "TikTok" ainda aparece em lugares antigos | vários | Baixo — cosmético, mas confunde |
-| 6 dos 79 vídeos sem origem identificável | dados | Baixo — nomes fora de padrão, esperado |
+
+Pagas desde a última revisão: o `npm test` passou a carregar o `.env.local`
+(`vitest.config.ts`); há teste do parser do Tesseract com CRLF
+(`tests/media.test.ts`); o GhostCLI está em uso contra a API real; e os 98
+vídeos têm origem identificada.
 
 ---
 
 ## Perguntas em aberto para o usuário
 
-1. Configurar o token do Facebook para captura do Instagram, ou seguir sem?
-2. Os 6 vídeos sem link têm origem recuperável de outra fonte (planilha, log do
-   downloader)?
-3. Agora que o OCR funciona: manter a geração de CTA apoiada em OCR +
-   transcrição, ou vale investir num provedor de visão (Fase 2.1)?
+1. Reanalisar os 93 vídeos sem transcrição (item 0.7)? Custa chamadas pagas.
+2. Configurar o token do Facebook para captura do Instagram, ou seguir sem?
+3. Com OCR e transcrição funcionando: manter a geração de CTA apoiada neles, ou
+   vale investir num provedor de visão (Fase 2.1)?
 
 ---
 
 ## Atualização 2026-09-21
 
-### Fase 0 — Desbloqueio (atualizado)
+A tabela da Fase 0 que ficava aqui foi incorporada à do topo (item 0.6 abaixo).
 
 | # | Item | Estado |
 | --- | --- | --- |
-| 0.1 | Colocar o projeto em git e commitar o estado atual | ✅ 2026-09-18 |
-| 0.2 | Resolver o OCR no Windows | ✅ 2026-09-18 — era CRLF no parser do TSV |
-| 0.3 | Instalar `faster-whisper` e ligar a transcrição | ❌ **ainda é o gargalo** |
-| 0.4 | Testar o GhostCLI contra a API real, não o mock | ❌ |
-| 0.5 | Reanalisar os 79 vídeos já importados | ❌ foram processados com o OCR quebrado |
 | 0.6 | **Corrigir crash do painel lateral** | ✅ 2026-09-21 — `PostComment` movido para `viewTypes.ts`; `ErrorBoundary` criado |
 
 ### Regra crítica adicionada

@@ -6,6 +6,8 @@ import type { EditorTemplateConfig } from "../types";
 import type { NormalizedRect } from "./crop";
 import { buildFilterGraph } from "./filterGraph";
 import { consumeProgress, newProgressState, type ProgressSnapshot } from "./progress";
+import { containerArgs, videoEncoderArgs } from "./exportPreset";
+import { probe } from "../media/ffmpeg";
 
 /**
  * Renderiza um video com o recorte e o template aplicados (spec §102).
@@ -19,6 +21,8 @@ import { consumeProgress, newProgressState, type ProgressSnapshot } from "./prog
  */
 
 export interface ExportRequest {
+  /** Chave do processo para cancelamento: o id do job, não do vídeo. */
+  jobId: string;
   videoId: string;
   sourcePath: string;
   originalName: string;
@@ -28,6 +32,8 @@ export interface ExportRequest {
   hasAudio: boolean;
   crop: NormalizedRect | null;
   template: EditorTemplateConfig;
+  /** Camada de texto já renderizada (arquivo em `textLayersDir`), ou nula. */
+  textLayer?: string | null;
   fps?: number;
   encoder?: string;
 }
@@ -39,8 +45,18 @@ export interface ExportResult {
 
 export class ExportError extends Error {}
 
-/** Processos em andamento, para o cancelamento alcançá-los (§113). */
-const running = new Map<string, { kill: () => void; partial: string }>();
+/**
+ * Processos em andamento, para o cancelamento alcança-los (§113).
+ *
+ * Fica no `globalThis`, nao numa constante do modulo: o Next.js carrega uma
+ * copia deste arquivo para o `instrumentation` (onde o worker roda) e outra
+ * para as rotas de API. Com um Map por copia, a rota de cancelar procurava o
+ * FFmpeg num mapa vazio e o render seguia ate o fim.
+ */
+const globalRef = globalThis as unknown as {
+  __editorExportRunning?: Map<string, { kill: () => void; partial: string }>;
+};
+const running = (globalRef.__editorExportRunning ??= new Map());
 
 /**
  * Nome de saida que nao sobrescreve nada (§110).
@@ -52,20 +68,25 @@ export function uniqueOutputPath(dir: string, originalName: string): string {
   const base = path.basename(originalName, path.extname(originalName));
   let candidate = path.join(dir, `${base}_editado.mp4`);
   let n = 2;
-  while (fs.existsSync(candidate)) {
+  // O .processing também conta como ocupado: com exports em paralelo, dois
+  // jobs do mesmo vídeo escolheriam o mesmo nome antes de qualquer um terminar.
+  while (fs.existsSync(candidate) || fs.existsSync(`${candidate}.processing`)) {
     candidate = path.join(dir, `${base}_editado_${n}.mp4`);
     n++;
   }
   return candidate;
 }
 
-function encoderArgs(encoder: string): string[] {
-  // NVENC/QSV/AMF não entendem -crf; cada um tem seu controle de qualidade.
-  if (encoder === "libx264") return ["-c:v", "libx264", "-preset", "medium", "-crf", "20"];
-  if (encoder === "h264_nvenc") return ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "23"];
-  if (encoder === "h264_qsv") return ["-c:v", "h264_qsv", "-global_quality", "23"];
-  if (encoder === "h264_amf") return ["-c:v", "h264_amf", "-quality", "balanced"];
-  return ["-c:v", "libx264", "-preset", "medium", "-crf", "20"];
+/**
+ * Escolhe o nome e ja cria o `.processing` vazio, para reservar.
+ *
+ * Checar e criar acontecem sem `await` no meio, e o Node roda isso numa thread
+ * so: nenhum outro job consegue escolher o mesmo nome entre as duas coisas.
+ */
+function reserveOutputPath(dir: string, originalName: string): string {
+  const outputPath = uniqueOutputPath(dir, originalName);
+  fs.closeSync(fs.openSync(`${outputPath}.processing`, "wx"));
+  return outputPath;
 }
 
 export async function renderVideo(
@@ -81,58 +102,80 @@ export async function renderVideo(
 
   const t = req.template;
   const fps = req.fps ?? 30;
+  const textLayerPath = req.textLayer ? path.join(env.textLayersDir, path.basename(req.textLayer)) : null;
+
+  // A matriz de cor não fica no banco: é lida da origem agora, porque a
+  // conversão para BT.709 parte dela (parte do acervo vem em BT.601).
+  let sourceColorSpace: string | null = null;
+  try {
+    sourceColorSpace = (await probe(req.sourcePath)).colorSpace;
+  } catch {
+    // Sem leitura, vale a convenção dos players (assumedColorSpace).
+  }
+
   const graph = buildFilterGraph({
     crop: req.crop,
     sourceWidth: req.sourceWidth,
     sourceHeight: req.sourceHeight,
+    durationSeconds: req.durationSeconds,
+    sourceHasAudio: req.hasAudio,
+    sourceColorSpace,
     template: t,
     fps,
     hasBackgroundImage: Boolean(t.background),
     hasOverlayImage: Boolean(t.overlay),
     hasLogoImage: Boolean(t.logo),
+    hasTextLayer: Boolean(textLayerPath),
   });
 
   const asset = (name: string) => path.join(env.templatesDir, path.basename(name));
-  for (const kind of graph.imageInputs) {
-    const file = asset(t[kind]!);
-    if (!fs.existsSync(file)) {
-      throw new ExportError(`A imagem de ${kind} do template não está mais no disco.`);
+  const LABEL: Record<string, string> = {
+    background: "A imagem de fundo do template",
+    overlay: "O overlay do template",
+    logo: "A logo do template",
+    text: "A camada de texto deste vídeo",
+    music: "A música do template",
+  };
+  const fileFor = (kind: (typeof graph.inputs)[number]): string =>
+    kind === "text" ? textLayerPath! : kind === "music" ? asset(t.audio!.music!) : asset(t[kind]!);
+
+  // Arquivo sumido vira erro claro antes de o FFmpeg subir, não um MP4 sem
+  // logo nem um erro genérico do FFmpeg no meio do lote.
+  for (const kind of graph.inputs) {
+    if (kind === "background" && graph.colorSource) continue;
+    if (!fs.existsSync(fileFor(kind))) {
+      throw new ExportError(`${LABEL[kind]} não está mais no disco.`);
     }
   }
 
   fs.mkdirSync(env.outputDir, { recursive: true });
-  const outputPath = uniqueOutputPath(env.outputDir, req.originalName);
+  const outputPath = reserveOutputPath(env.outputDir, req.originalName);
   const partial = `${outputPath}.processing`;
 
   const args: string[] = ["-y", "-v", "error", "-progress", "pipe:1", "-i", req.sourcePath];
 
-  // A entrada 1 é sempre o fundo: imagem enviada ou cor sólida via lavfi.
-  if (graph.colorSource) {
-    args.push("-f", "lavfi", "-i", graph.colorSource);
-  } else {
-    args.push("-i", asset(t.background!));
-  }
-  for (const kind of graph.imageInputs) {
-    if (kind === "background") continue;
-    args.push("-i", asset(t[kind]!));
+  // A ordem dos -i é a de graph.inputs; a entrada 1 é sempre o fundo. Imagens
+  // entram em loop e a música em loop contínuo: o vídeo é a única fonte finita
+  // e é ele que encerra o arquivo (ver filterGraph.ts).
+  for (const kind of graph.inputs) {
+    if (kind === "background" && graph.colorSource) {
+      args.push("-f", "lavfi", "-i", graph.colorSource);
+    } else if (kind === "music") {
+      args.push("-stream_loop", "-1", "-i", fileFor(kind));
+    } else {
+      args.push("-loop", "1", "-i", fileFor(kind));
+    }
   }
 
   args.push("-filter_complex", graph.filterComplex, "-map", `[${graph.outputLabel}]`);
-
-  if (req.hasAudio) {
-    args.push("-map", "0:a:0?", "-c:a", "aac", "-b:a", "128k", "-ar", "48000");
-  } else {
-    args.push("-an");
-  }
+  if (graph.audioLabel) args.push("-map", `[${graph.audioLabel}]`);
 
   args.push(
-    ...encoderArgs(req.encoder ?? "libx264"),
-    "-r", String(fps),
-    "-movflags", "+faststart",
+    ...videoEncoderArgs(req.encoder ?? "libx264", fps),
+    // Inclui `-f mp4`: o arquivo temporário termina em `.processing`, e o
+    // FFmpeg deduziria o formato pela extensão e recusaria.
+    ...containerArgs(graph.audioLabel !== null, fps),
     "-shortest",
-    // O container vai explícito porque o arquivo temporário termina em
-    // `.processing`: o FFmpeg deduz o formato pela extensão e recusaria.
-    "-f", "mp4",
     partial,
   );
 
@@ -142,7 +185,7 @@ export async function renderVideo(
     const errLines: string[] = [];
     let cancelled = false;
 
-    running.set(req.videoId, {
+    running.set(req.jobId, {
       partial,
       kill: () => {
         cancelled = true;
@@ -169,13 +212,13 @@ export async function renderVideo(
     };
 
     child.on("error", (err) => {
-      running.delete(req.videoId);
+      running.delete(req.jobId);
       cleanupPartial();
       reject(new ExportError(`Não foi possível executar o FFmpeg: ${err.message}`));
     });
 
     child.on("close", (code) => {
-      running.delete(req.videoId);
+      running.delete(req.jobId);
 
       if (cancelled) {
         cleanupPartial();
@@ -200,13 +243,13 @@ export async function renderVideo(
   });
 }
 
-export function cancelExport(videoId: string): boolean {
-  const job = running.get(videoId);
+export function cancelExport(jobId: string): boolean {
+  const job = running.get(jobId);
   if (!job) return false;
   job.kill();
   return true;
 }
 
-export function isExporting(videoId: string): boolean {
-  return running.has(videoId);
+export function isExporting(jobId: string): boolean {
+  return running.has(jobId);
 }

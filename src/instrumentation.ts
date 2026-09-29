@@ -10,6 +10,11 @@ export async function register(): Promise<void> {
   const { db } = await import("./lib/db");
   db();
 
+  // A fila do editor sobe sempre aqui, independente de WORKER_IN_PROCESS: o
+  // cancelamento precisa alcançar o FFmpeg, que só existe neste processo.
+  const { startExportWorker } = await import("./lib/editor/exportQueue");
+  void startExportWorker();
+
   if (!env.workerInProcess) {
     const { recoverStaleJobs } = await import("./lib/queue");
     const recovery = recoverStaleJobs();

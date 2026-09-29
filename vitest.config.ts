@@ -15,6 +15,10 @@ export default defineConfig({
     environment: "node",
     include: ["tests/**/*.test.ts"],
     testTimeout: 120_000,
+    // Os testes de banco importam os módulos no beforeAll (depois de apontar
+    // DATA_DIR para uma pasta temporária). Com a máquina carregada, o limite
+    // padrão de 10 s do hook estourava e a suíte inteira era pulada.
+    hookTimeout: 120_000,
   },
   resolve: {
     alias: { "@": path.resolve(__dirname, "./src") },

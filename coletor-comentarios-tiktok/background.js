@@ -166,16 +166,21 @@ async function garantirScript(tabId) {
 // Polling periódico consulta /api/extension/pending-captures e processa itens
 // usando a mesma lógica de executarCapturaEmLote já existente.
 
-const POLL_INTERVAL_MS = 30_000;
+const POLL_ALARM = 'capture-queue';
 let isPolling = false;
 
 async function pollCaptureQueue() {
   if (isPolling) return;
-  // Precisa do token e da URL base; tenta obter do storage ou usa defaults
-  const data = await chrome.storage.local.get(['ingestToken', 'apiBase']);
-  const token = data.ingestToken || '';
-  const apiBase = (data.apiBase || 'http://127.0.0.1:3000').replace(/\/+$/, '');
-  if (!token) return; // Sem token configurado, não faz polling
+  // As mesmas chaves que o popup grava em "Enviar para Short CTA AI". Antes o
+  // polling lia 'ingestToken'/'apiBase', que nada gravava: o token vinha sempre
+  // vazio e a fila automatica nunca processou um pedido.
+  const data = await chrome.storage.local.get(['shortCtaToken', 'shortCtaUrl']);
+  const token = (data.shortCtaToken || '').trim();
+  const apiBase = (data.shortCtaUrl || 'http://127.0.0.1:3000').replace(/\/+$/, '');
+  if (!token) {
+    console.warn('[capture-queue] Sem token salvo no popup; a fila automatica fica parada.');
+    return;
+  }
 
   isPolling = true;
   try {
@@ -291,6 +296,12 @@ async function pollCaptureQueue() {
   }
 }
 
-setInterval(pollCaptureQueue, POLL_INTERVAL_MS);
+// chrome.alarms, e nao setInterval: no Manifest V3 o service worker e
+// encerrado depois de ~30 s ocioso e o timer morre junto. O alarme acorda o
+// worker. 0.5 min e o menor periodo que o Chrome aceita.
+chrome.alarms.create(POLL_ALARM, { periodInMinutes: 0.5 });
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === POLL_ALARM) pollCaptureQueue();
+});
 // Primeira verificação após 5s (dá tempo do service worker inicializar)
 setTimeout(pollCaptureQueue, 5000);

@@ -16,6 +16,12 @@ export interface MediaProbe {
   hasAudio: boolean;
   hasVideo: boolean;
   bitrate: number | null;
+  /**
+   * Matriz de cor declarada no vídeo (`bt709`, `smpte170m`...), ou nula quando
+   * o arquivo não declara. A exportação converte a partir dela — e parte do
+   * acervo real vem em BT.601, não BT.709.
+   */
+  colorSpace: string | null;
 }
 
 interface FfprobeStream {
@@ -24,6 +30,7 @@ interface FfprobeStream {
   width?: number;
   height?: number;
   duration?: string;
+  color_space?: string;
 }
 
 interface FfprobeOutput {
@@ -72,6 +79,10 @@ export async function probe(filePath: string): Promise<MediaProbe> {
     hasAudio: Boolean(audio),
     hasVideo: Boolean(video),
     bitrate: data.format?.bit_rate ? Number(data.format.bit_rate) : null,
+    colorSpace:
+      video?.color_space && !["unknown", "reserved", "unspecified"].includes(video.color_space)
+        ? video.color_space
+        : null,
   };
 }
 

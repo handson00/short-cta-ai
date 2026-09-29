@@ -1,12 +1,18 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import type { EditorCrop, EditorSystemStatus, EditorTemplate } from "@/lib/types";
-import TemplatePanel from "./TemplatePanel";
+import { useCallback, useEffect, useState } from "react";
+import type { EditorCrop, EditorSystemStatus, EditorTemplate, EditorTemplateConfig } from "@/lib/types";
+import TemplatePanel, { type SaveState } from "./TemplatePanel";
 import { aspectRatioStyle, parseRatio } from "@/lib/aspect";
 import { clampRect, FULL_FRAME, type NormalizedRect } from "@/lib/editor/crop";
 import CropOverlay from "./CropOverlay";
 import CompositionPreview from "./CompositionPreview";
+import ExportQueuePanel from "./ExportQueuePanel";
+import { renderTextLayerPng } from "./textCanvas";
+import type { TextLayout } from "@/lib/editor/textLayout";
+
+/** Vídeos por pedido de detecção: o suficiente para mostrar progresso. */
+const DETECT_CHUNK = 10;
 
 interface LibraryVideo {
   id: string;
@@ -18,12 +24,27 @@ interface LibraryVideo {
   durationSeconds: number | null;
   hasCta: boolean;
   ctaText: string | null;
+  /** De onde veio o CTA: mesma regra da Fila, com a recomendação por último. */
+  ctaSource: "editado" | "escolhido" | "recomendado" | null;
+  /** Texto próprio definido no editor; vence o CTA. */
+  textOverride: string | null;
   commentCount: number;
   hashtagCount: number;
   hasAnalysis: boolean;
   status: string;
   templateId: string | null;
 }
+
+/** O texto que vai sobre o vídeo: o próprio do editor, senão o CTA da análise. */
+function videoText(v: Pick<LibraryVideo, "textOverride" | "ctaText">): string {
+  return (v.textOverride ?? v.ctaText ?? "").trim();
+}
+
+const CTA_SOURCE_LABEL: Record<string, string> = {
+  editado: "CTA editado na Fila",
+  escolhido: "CTA escolhido na Fila",
+  recomendado: "CTA recomendado pela análise — nenhum foi escolhido na Fila",
+};
 
 export default function EditorShell() {
   const [status, setStatus] = useState<EditorSystemStatus | null>(null);
@@ -42,8 +63,24 @@ export default function EditorShell() {
   const [panelTab, setPanelTab] = useState<"recorte" | "preview">("recorte");
   const [saving, setSaving] = useState(false);
   const [detecting, setDetecting] = useState(false);
+  const [detectProgress, setDetectProgress] = useState<{ done: number; total: number } | null>(null);
   const [exporting, setExporting] = useState(false);
-  const [exportDone, setExportDone] = useState<Array<{ name: string; path: string }>>([]);
+  const [exportProgress, setExportProgress] = useState<string | null>(null);
+  const [queueRefresh, setQueueRefresh] = useState(0);
+  // Rascunho do texto do vídeo em preview, salvo sozinho. `textDraftFor` diz de
+  // qual vídeo ele é: ao trocar de vídeo há um render em que o rascunho ainda
+  // é o do anterior, e sem essa marca o autosave o gravaria no vídeo novo.
+  const [textDraft, setTextDraft] = useState("");
+  const [textDraftFor, setTextDraftFor] = useState<string | null>(null);
+  // Rascunho do template aberto no painel, para a aba Preview mostrar as
+  // alterações em tempo real, e o estado do salvamento dele.
+  const [liveTemplate, setLiveTemplate] = useState<{ id: string | null; config: EditorTemplateConfig } | null>(null);
+  const [templateSaveState, setTemplateSaveState] = useState<SaveState>("saved");
+  const onDraftChange = useCallback(
+    (id: string | null, config: EditorTemplateConfig) => setLiveTemplate({ id, config }),
+    [],
+  );
+  const [previewTextLayout, setPreviewTextLayout] = useState<TextLayout | null>(null);
   const [templates, setTemplates] = useState<EditorTemplate[]>([]);
   const [activeTemplateId, setActiveTemplateId] = useState<string | null>(null);
   const [detection, setDetection] = useState<{
@@ -83,6 +120,28 @@ export default function EditorShell() {
     const saved = crops[previewVideoId];
     setRect(saved ? { x: saved.x, y: saved.y, width: saved.width, height: saved.height } : FULL_FRAME);
   }, [previewVideoId, crops]);
+
+  // O campo de texto mostra o texto que vai sair no vídeo em preview. Só
+  // depende da troca de vídeo: salvar não pode apagar o que se está digitando.
+  useEffect(() => {
+    const v = libraryVideos.find((x) => x.id === previewVideoId);
+    setTextDraft(v ? videoText(v) : "");
+    setTextDraftFor(previewVideoId);
+    setPreviewTextLayout(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [previewVideoId]);
+
+  // Texto salvo sozinho, meio segundo depois da última tecla.
+  useEffect(() => {
+    if (!previewVideoId || textDraftFor !== previewVideoId) return;
+    const v = libraryVideos.find((x) => x.id === previewVideoId);
+    if (!v) return;
+    const override = draftOverride(v);
+    if (override === (v.textOverride ?? null)) return;
+    const timer = setTimeout(() => void saveTextOverride(v.id, override), 500);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [textDraft, textDraftFor, previewVideoId, libraryVideos]);
 
   // A caixa marca para o lote; o clique no card abre o recorte. Antes um gesto
   // só fazia as duas coisas, e não dava para ver um vídeo sem selecioná-lo.
@@ -142,30 +201,52 @@ export default function EditorShell() {
     }
   }
 
-  /** Detecção em lote: aqui grava, porque revisar 30 um a um anula o ganho. */
+  /**
+   * Detecção em lote: aqui grava, porque revisar 30 um a um anula o ganho.
+   *
+   * Vai em pacotes de 10. Um pedido só com o lote inteiro estourava o limite
+   * da rota ("selecionar todos" com 98 vídeos devolvia erro) e deixava a tela
+   * sem nenhum sinal de progresso por minutos.
+   */
   async function detectBatch(videoIds: string[]) {
     if (videoIds.length === 0) return;
     setDetecting(true);
     setNotice(null);
+    setDetectProgress({ done: 0, total: videoIds.length });
+
+    type DetectResult = {
+      videoId: string;
+      rect?: NormalizedRect;
+      confidence?: number;
+      level?: string;
+      hasBorder?: boolean;
+      saved?: boolean;
+      error?: string | null;
+    };
+    const results: DetectResult[] = [];
+
     try {
-      const res = await fetch("/api/editor/smart-crop", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ videoIds, save: true }),
+      for (let i = 0; i < videoIds.length; i += DETECT_CHUNK) {
+        const chunk = videoIds.slice(i, i + DETECT_CHUNK);
+        const res = await fetch("/api/editor/smart-crop", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ videoIds: chunk, save: true }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+        results.push(...((data.results ?? []) as DetectResult[]));
+        setDetectProgress({ done: Math.min(i + chunk.length, videoIds.length), total: videoIds.length });
+      }
+    } catch (err) {
+      // O que já foi detectado e gravado continua valendo; o aviso diz onde parou.
+      setNotice({
+        kind: "erro",
+        text: `${err instanceof Error ? err.message : "Falha na detecção em lote."} (${results.length} de ${videoIds.length} analisados antes da falha)`,
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+    }
 
-      const results: Array<{
-        videoId: string;
-        rect?: NormalizedRect;
-        confidence?: number;
-        level?: string;
-        hasBorder?: boolean;
-        saved?: boolean;
-        error?: string | null;
-      }> = data.results ?? [];
-
+    try {
       setCrops((prev) => {
         const next = { ...prev };
         for (const r of results) {
@@ -181,26 +262,24 @@ export default function EditorShell() {
         return next;
       });
 
-      const salvos = results.filter((r) => r.saved).length;
-      const revisar = results.filter((r) => r.saved && r.level !== "alta").length;
-      const semMoldura = results.filter((r) => !r.error && r.hasBorder === false).length;
-      const falhas = results.filter((r) => r.error).length;
+      if (results.length === videoIds.length) {
+        const salvos = results.filter((r) => r.saved).length;
+        const revisar = results.filter((r) => r.saved && r.level !== "alta").length;
+        const semMoldura = results.filter((r) => !r.error && r.hasBorder === false).length;
+        const falhas = results.filter((r) => r.error).length;
 
-      // Cada número é dito separadamente: "30 detectados" esconderia que 8
-      // precisam de revisão e 2 falharam.
-      const partes = [`${salvos} recorte(s) detectado(s)`];
-      if (revisar > 0) partes.push(`${revisar} com confiança baixa — revise`);
-      if (semMoldura > 0) partes.push(`${semMoldura} sem moldura`);
-      if (falhas > 0) partes.push(`${falhas} falhou(ram)`);
+        // Cada número é dito separadamente: "30 detectados" esconderia que 8
+        // precisam de revisão e 2 falharam.
+        const partes = [`${salvos} recorte(s) detectado(s)`];
+        if (revisar > 0) partes.push(`${revisar} com confiança baixa — revise`);
+        if (semMoldura > 0) partes.push(`${semMoldura} sem moldura`);
+        if (falhas > 0) partes.push(`${falhas} falhou(ram)`);
 
-      setNotice({ kind: falhas > 0 ? "erro" : "ok", text: partes.join(" · ") });
-    } catch (err) {
-      setNotice({
-        kind: "erro",
-        text: err instanceof Error ? err.message : "Falha na detecção em lote.",
-      });
+        setNotice({ kind: falhas > 0 ? "erro" : "ok", text: partes.join(" · ") });
+      }
     } finally {
       setDetecting(false);
+      setDetectProgress(null);
     }
   }
 
@@ -233,45 +312,104 @@ export default function EditorShell() {
     }
   }
 
+  /**
+   * Cada vídeo sai com o template aplicado a ele; o template aberto no painel
+   * vale só para quem ainda não tem um. É a mesma regra da aba Preview e do
+   * servidor — o que se vê antes é o que sai.
+   */
   async function exportSelected() {
     const ids = [...selectedIds];
     if (ids.length === 0) return;
 
-    // Exportar com template diferente por vídeo exigiria uma chamada por
-    // template; hoje o lote usa o template aberto no painel.
-    if (!activeTemplateId) {
-      setNotice({ kind: "erro", text: "Escolha um template no painel da esquerda antes de exportar." });
+    // A fila lê o template salvo. Com salvamento pendente, o vídeo sairia com a
+    // versão anterior à que o preview está mostrando.
+    if (templateSaveState === "pending" || templateSaveState === "saving") {
+      setNotice({ kind: "erro", text: "O template ainda está salvando. Tente de novo em um instante." });
+      return;
+    }
+    if (templateSaveState === "error") {
+      setNotice({
+        kind: "erro",
+        text: "A última alteração do template não pôde ser salva (veja o aviso no painel da esquerda). Corrija antes de exportar.",
+      });
+      return;
+    }
+
+    const semTemplate = libraryVideos.filter((v) => selectedIds.has(v.id) && !v.templateId).length;
+    if (semTemplate > 0 && !activeTemplateId) {
+      setNotice({
+        kind: "erro",
+        text: `${semTemplate} vídeo(s) sem template aplicado. Aplique um template a eles ou abra um no painel da esquerda.`,
+      });
       return;
     }
 
     setExporting(true);
     setNotice(null);
-    setExportDone([]);
     try {
+      // Texto digitado e ainda não salvo (clicar em Exportar sem sair do
+      // campo) é gravado agora: a exportação usa o que o preview mostrou.
+      const pv = libraryVideos.find((x) => x.id === previewVideoId) ?? null;
+      const pending = pv ? draftOverride(pv) : null;
+      const pendingDirty = pv !== null && pending !== (pv.textOverride ?? null);
+      if (pv && pendingDirty) await saveTextOverride(pv.id, pending);
+      const vids = libraryVideos.map((v) =>
+        pv && pendingDirty && v.id === pv.id ? { ...v, textOverride: pending } : v,
+      );
+
+      // A camada de texto é desenhada aqui, pela mesma função do preview, e
+      // enviada antes de enfileirar: o que sai no vídeo é o que se viu na tela.
+      const textLayers: Record<string, string> = {};
+      const naoCouberam: string[] = [];
+      const comTexto = vids.filter((v) => {
+        if (!selectedIds.has(v.id)) return false;
+        const t = templates.find((x) => x.id === (v.templateId ?? activeTemplateId));
+        return Boolean(t?.config.text?.enabled && videoText(v));
+      });
+      for (let i = 0; i < comTexto.length; i++) {
+        const v = comTexto[i];
+        setExportProgress(`Preparando textos ${i + 1} de ${comTexto.length}…`);
+        const style = templates.find((x) => x.id === (v.templateId ?? activeTemplateId))!.config.text!;
+        const { blob, layout } = await renderTextLayerPng(videoText(v), style);
+        if (layout.overflow) naoCouberam.push(v.originalName);
+        const body = new FormData();
+        body.append("file", blob, "texto.png");
+        body.append("videoId", v.id);
+        const up = await fetch("/api/editor/text-layer", { method: "POST", body });
+        const upData = await up.json();
+        if (!up.ok) throw new Error(`Texto de ${v.originalName}: ${upData.error ?? `HTTP ${up.status}`}`);
+        textLayers[v.id] = upData.layer;
+      }
+      setExportProgress("Enviando para a fila…");
+
       const res = await fetch("/api/editor/export", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ videoIds: ids, templateId: activeTemplateId }),
+        body: JSON.stringify({ videoIds: ids, templateId: activeTemplateId, textLayers }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
 
-      const results: Array<{ videoId: string; outputPath?: string; error?: string | null }> =
-        data.results ?? [];
-      const ok = results.filter((r) => r.outputPath);
-      const falhas = results.filter((r) => r.error);
-
-      setExportDone(
-        ok.map((r) => ({
-          name: libraryVideos.find((v) => v.id === r.videoId)?.originalName ?? r.videoId,
-          path: r.outputPath!,
-        })),
-      );
-
-      // Cada número separado: "12 exportados" esconderia os que falharam.
-      const partes = [`${ok.length} vídeo(s) exportado(s) com ${data.encoder}`];
-      if (falhas.length > 0) partes.push(`${falhas.length} falhou(ram): ${falhas[0].error}`);
-      setNotice({ kind: falhas.length > 0 ? "erro" : "ok", text: partes.join(" · ") });
+      // Diz com qual template cada grupo saiu: o painel pode estar mostrando
+      // um template e parte do lote ter outro aplicado.
+      const porTemplate = Object.entries((data.byTemplate ?? {}) as Record<string, number>)
+        .map(([id, n]) => `${n} com "${templates.find((t) => t.id === id)?.name ?? id}"`)
+        .join(", ");
+      const pulados = (data.skipped ?? []).length;
+      const avisos: string[] = [];
+      if (pulados > 0) avisos.push(`${pulados} ficaram de fora por não ter template.`);
+      if (naoCouberam.length > 0) {
+        avisos.push(
+          `${naoCouberam.length} texto(s) não couberam na caixa e sairão cortados: ${naoCouberam.slice(0, 3).join(", ")}${naoCouberam.length > 3 ? "…" : ""}.`,
+        );
+      }
+      setNotice({
+        kind: avisos.length > 0 ? "erro" : "ok",
+        text:
+          `${data.jobIds.length} vídeo(s) na fila de exportação: ${porTemplate}. ` +
+          (avisos.length > 0 ? avisos.join(" ") : "Pode continuar editando."),
+      });
+      setQueueRefresh((n) => n + 1);
     } catch (err) {
       setNotice({
         kind: "erro",
@@ -279,6 +417,28 @@ export default function EditorShell() {
       });
     } finally {
       setExporting(false);
+      setExportProgress(null);
+    }
+  }
+
+  /** Grava (ou, vazio, apaga) o texto próprio do vídeo. Não mexe na escolha da Fila. */
+  async function saveTextOverride(videoId: string, text: string | null) {
+    setNotice(null);
+    try {
+      const res = await fetch("/api/editor/text", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ videoId, text }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+      const clean = text?.trim() || null;
+      setLibraryVideos((prev) => prev.map((v) => (v.id === videoId ? { ...v, textOverride: clean } : v)));
+    } catch (err) {
+      setNotice({
+        kind: "erro",
+        text: err instanceof Error ? err.message : "Falha ao salvar o texto.",
+      });
     }
   }
 
@@ -355,7 +515,32 @@ export default function EditorShell() {
   const allGood = status.ffmpeg && status.ffprobe;
   const previewVideo = libraryVideos.find((v) => v.id === previewVideoId) ?? null;
   const previewBox = previewVideo ? fitBox(previewVideo) : undefined;
-  const activeTemplate = templates.find((t) => t.id === activeTemplateId) ?? null;
+  /**
+   * O que o rascunho do campo de texto significa para o vídeo em preview:
+   * igual ao CTA (ou vazio) = sem texto próprio; diferente = texto próprio.
+   */
+  function draftOverride(v: LibraryVideo): string | null {
+    const clean = textDraft.trim();
+    return clean && clean !== (v.ctaText ?? "").trim() ? clean : null;
+  }
+  const textDirty = previewVideo !== null && draftOverride(previewVideo) !== (previewVideo.textOverride ?? null);
+  // O preview mostra o que se está digitando; a exportação grava esse mesmo
+  // rascunho antes de desenhar, então os dois nunca divergem.
+  const previewLiveText = previewVideo ? (draftOverride(previewVideo) ?? previewVideo.ctaText ?? "") : "";
+
+  // Mesma regra da exportação: o template aplicado ao vídeo vence o do painel.
+  // Se é o template aberto no painel, a aba Preview mostra o rascunho: a
+  // alteração aparece na hora, e o autosave grava logo em seguida.
+  const savedPreviewTemplate =
+    templates.find((t) => t.id === (previewVideo?.templateId ?? activeTemplateId)) ?? null;
+  const previewTemplate =
+    savedPreviewTemplate && liveTemplate?.id === savedPreviewTemplate.id
+      ? { ...savedPreviewTemplate, config: liveTemplate.config }
+      : savedPreviewTemplate;
+  const savedCrop = previewVideo ? (crops[previewVideo.id] ?? FULL_FRAME) : FULL_FRAME;
+  const cropUnsaved =
+    previewVideo !== null &&
+    (["x", "y", "width", "height"] as const).some((k) => Math.abs(rect[k] - savedCrop[k]) > 1e-4);
 
   return (
     // Sai do container central de 1152px do layout: com template à esquerda e
@@ -401,31 +586,7 @@ export default function EditorShell() {
         </div>
       )}
 
-      {exporting && (
-        <div className="rounded-lg border border-accent/40 bg-accent/10 px-4 py-3 text-sm text-accent">
-          Renderizando… os vídeos são processados um de cada vez. Não feche a página.
-        </div>
-      )}
-
-      {exportDone.length > 0 && (
-        <div className="rounded-lg border border-emerald-800 bg-emerald-950/30 px-4 py-3">
-          <p className="text-sm font-medium text-emerald-200">
-            {exportDone.length} arquivo(s) gerado(s)
-          </p>
-          <ul className="mt-1 space-y-0.5 font-mono text-[11px] text-emerald-300/80">
-            {exportDone.slice(0, 8).map((f) => (
-              <li key={f.path} className="truncate" title={f.path}>
-                {f.path}
-              </li>
-            ))}
-          </ul>
-          {exportDone.length > 8 && (
-            <p className="mt-1 text-[11px] text-emerald-300/60">
-              e mais {exportDone.length - 8}…
-            </p>
-          )}
-        </div>
-      )}
+      <ExportQueuePanel refreshKey={queueRefresh} />
 
       <div className="flex gap-6">
         <TemplatePanel
@@ -451,6 +612,12 @@ export default function EditorShell() {
           onAssign={(id) => void assignTemplate(id)}
           previewThumb={previewVideo ? `/api/videos/${previewVideo.id}/thumb` : null}
           previewCrop={previewVideo ? (crops[previewVideo.id] ?? null) : null}
+          previewText={previewVideo && textDraftFor === previewVideo.id ? textDraft : null}
+          previewLiveText={previewLiveText}
+          previewPlaceholder={previewVideo?.ctaText ?? ""}
+          onPreviewTextChange={setTextDraft}
+          onDraftChange={onDraftChange}
+          onSaveStateChange={setTemplateSaveState}
           previewVideoWidth={previewVideo?.width ?? 1080}
           previewVideoHeight={previewVideo?.height ?? 1920}
           assignCount={selectedIds.size}
@@ -556,9 +723,12 @@ export default function EditorShell() {
                           {crops[v.id] ? " · Recorte personalizado" : ""}
                         </p>
 
-                        {v.ctaText && (
-                          <p className="mt-2 line-clamp-2 text-[11px] font-medium text-accent" title={v.ctaText}>
-                            ★ {v.ctaText}
+                        {videoText(v) && (
+                          <p
+                            className="mt-2 line-clamp-2 text-[11px] font-medium text-accent"
+                            title={v.textOverride ? "Texto próprio deste vídeo" : (CTA_SOURCE_LABEL[v.ctaSource ?? ""] ?? "")}
+                          >
+                            {v.textOverride ? "✎" : "★"} {videoText(v)}
                           </p>
                         )}
 
@@ -614,14 +784,18 @@ export default function EditorShell() {
                   disabled={detecting || exporting}
                   className="rounded-lg border border-accent/50 px-3 py-1.5 text-xs text-accent transition hover:bg-accent/10 disabled:opacity-50"
                 >
-                  {detecting ? "Analisando…" : `✨ Detectar recorte (${selectedIds.size})`}
+                  {detecting
+                    ? detectProgress
+                      ? `Analisando ${detectProgress.done} de ${detectProgress.total}…`
+                      : "Analisando…"
+                    : `✨ Detectar recorte (${selectedIds.size})`}
                 </button>
                 <button
                   onClick={() => void exportSelected()}
                   disabled={exporting || detecting}
                   className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white transition hover:bg-accent/90 disabled:opacity-50"
                 >
-                  {exporting ? "Exportando…" : `⬇ Exportar ${selectedIds.size} vídeo(s)`}
+                  {exporting ? (exportProgress ?? "Enviando para a fila…") : `⬇ Exportar ${selectedIds.size} vídeo(s)`}
                 </button>
               </div>
             </div>
@@ -680,12 +854,15 @@ export default function EditorShell() {
                   </div>
                 </div>
               </>
-            ) : activeTemplate ? (
+            ) : previewTemplate ? (
               <>
                 {/* Mesma composição que a exportação produz: o vídeo toca
-                    dentro do template, com o recorte já aplicado. */}
+                    dentro do template, com o recorte já aplicado. Usa a mesma
+                    regra da exportação — o template aplicado ao vídeo, ou o do
+                    painel se ele não tiver um — e as versões SALVAS do recorte
+                    e do template, que são as que a fila lê. */}
                 <CompositionPreview
-                  config={activeTemplate.config}
+                  config={previewTemplate.config}
                   crop={crops[previewVideo.id] ?? null}
                   mediaSrc={`/api/videos/${previewVideo.id}/media`}
                   mediaKind="video"
@@ -693,15 +870,76 @@ export default function EditorShell() {
                   videoWidth={previewVideo.width ?? 1080}
                   videoHeight={previewVideo.height ?? 1920}
                   displayHeight={440}
+                  text={previewLiveText}
+                  onTextLayout={setPreviewTextLayout}
                 />
                 <p className="text-center text-[10px] text-ink-500">
-                  {activeTemplate.config.canvasWidth}×{activeTemplate.config.canvasHeight} ·{" "}
-                  {activeTemplate.name} · {activeTemplate.config.fitMode.toUpperCase()}
+                  {previewTemplate.config.canvasWidth}×{previewTemplate.config.canvasHeight} ·{" "}
+                  {previewTemplate.name} · {previewTemplate.config.fitMode.toUpperCase()}
                 </p>
+                <p className="text-center text-[10px] text-ink-500">
+                  {previewVideo.templateId
+                    ? "Template aplicado a este vídeo."
+                    : "Este vídeo não tem template aplicado: usa o que está aberto no painel."}
+                </p>
+                {cropUnsaved && (
+                  <p className="rounded-md border border-amber-900/60 bg-amber-950/30 px-2 py-1 text-center text-[10px] text-amber-200">
+                    O recorte ajustado na aba Recorte ainda não foi aplicado. A prévia e a
+                    exportação usam o recorte salvo.
+                  </p>
+                )}
+
+                {previewTemplate.config.text?.enabled ? (
+                  <div className="space-y-1 border-t border-ink-800 pt-3">
+                    <label className="block text-[10px] uppercase tracking-wider text-ink-500">
+                      Texto sobre este vídeo
+                    </label>
+                    <textarea
+                      value={textDraft}
+                      onChange={(e) => setTextDraft(e.target.value)}
+                      onBlur={() => {
+                        if (textDirty) void saveTextOverride(previewVideo.id, draftOverride(previewVideo));
+                      }}
+                      rows={3}
+                      placeholder={previewVideo.ctaText ?? "Sem CTA na análise — escreva o texto deste vídeo."}
+                      className="w-full resize-none rounded-md border border-ink-700 bg-ink-950/60 px-2 py-1.5 text-xs text-ink-200 focus:border-accent focus:outline-none"
+                    />
+                    <p className="text-[10px] text-ink-500">
+                      {draftOverride(previewVideo)
+                        ? "Texto próprio deste vídeo. Não altera a escolha feita na Fila."
+                        : previewVideo.ctaSource
+                          ? CTA_SOURCE_LABEL[previewVideo.ctaSource]
+                          : "Este vídeo não tem CTA na análise: sem texto, sai sem texto."}
+                    </p>
+                    {draftOverride(previewVideo) && (
+                      <button
+                        onClick={() => {
+                          setTextDraft(previewVideo.ctaText ?? "");
+                          void saveTextOverride(previewVideo.id, null);
+                        }}
+                        className="text-[10px] text-accent underline hover:text-accent/80"
+                      >
+                        Voltar ao CTA da análise
+                      </button>
+                    )}
+                    {previewTextLayout?.overflow && (
+                      <p className="rounded-md border border-amber-900/60 bg-amber-950/30 px-2 py-1 text-[10px] text-amber-200">
+                        O texto não coube na caixa nem no tamanho mínimo e sairá cortado. Encurte o
+                        texto ou ajuste a caixa no template.
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <p className="border-t border-ink-800 pt-3 text-center text-[10px] text-ink-500">
+                    Este template não mostra texto. Ligue "Texto (CTA)" no painel da esquerda para
+                    o CTA aparecer sobre o vídeo.
+                  </p>
+                )}
               </>
             ) : (
               <div className="rounded-lg border border-dashed border-ink-700 p-6 text-center text-xs text-ink-500">
-                Escolha um template no painel da esquerda para ver como o vídeo vai sair.
+                Aplique um template a este vídeo ou abra um no painel da esquerda para ver
+                como ele vai sair.
               </div>
             )}
 

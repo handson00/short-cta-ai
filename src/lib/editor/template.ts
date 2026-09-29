@@ -1,4 +1,4 @@
-import type { EditorTemplateConfig } from "../types";
+import type { EditorTemplateAudio, EditorTemplateConfig, EditorTextStyle } from "../types";
 import type { NormalizedRect, PixelRect } from "./crop";
 
 /**
@@ -23,6 +23,84 @@ export const DEFAULT_TEMPLATE: EditorTemplateConfig = {
   logoWidth: 240,
   logoHeight: 240,
 };
+
+/**
+ * Estilo inicial do texto. A caixa fica no topo: neste projeto o CTA é o
+ * texto-gancho exibido ACIMA do vídeo. Branco com contorno preto é legível
+ * sobre qualquer fundo.
+ */
+export const DEFAULT_TEXT_STYLE: EditorTextStyle = {
+  enabled: true,
+  x: 60,
+  y: 80,
+  width: 960,
+  height: 300,
+  fontFamily: "Arial Black",
+  bold: true,
+  maxFontSize: 76,
+  minFontSize: 36,
+  lineHeight: 1.15,
+  align: "center",
+  uppercase: true,
+  color: "#ffffff",
+  strokeColor: "#000000",
+  strokeWidth: 8,
+  start: 0,
+  end: null,
+  fadeIn: 0,
+  fadeOut: 0,
+};
+
+export const DEFAULT_AUDIO: EditorTemplateAudio = {
+  mode: "original",
+  originalVolume: 1,
+  musicVolume: 0.3,
+};
+
+/** Fontes comuns no Windows; qualquer outra entra por upload de TTF/OTF (§34). */
+export const SYSTEM_FONTS = [
+  "Arial Black",
+  "Impact",
+  "Arial",
+  "Segoe UI",
+  "Verdana",
+  "Tahoma",
+  "Trebuchet MS",
+  "Georgia",
+] as const;
+
+const HEX = /^#[0-9a-fA-F]{6}$/;
+
+function validateText(t: EditorTextStyle, config: EditorTemplateConfig): string | null {
+  if (!t.enabled) return null;
+  if (t.width < 20 || t.height < 20) return "A caixa do texto é pequena demais.";
+  if (t.x < 0 || t.y < 0) return "A caixa do texto não pode começar fora do canvas.";
+  if (t.x + t.width > config.canvasWidth) return "A caixa do texto ultrapassa a borda direita do canvas.";
+  if (t.y + t.height > config.canvasHeight) return "A caixa do texto ultrapassa a borda inferior do canvas.";
+  if (t.minFontSize < 8 || t.maxFontSize > 400) return "O tamanho da fonte precisa ficar entre 8 e 400.";
+  if (t.minFontSize > t.maxFontSize) return "O tamanho mínimo da fonte é maior que o máximo.";
+  if (t.lineHeight < 0.8 || t.lineHeight > 3) return "O espaçamento entre linhas precisa ficar entre 0,8 e 3.";
+  if (!HEX.test(t.color) || !HEX.test(t.strokeColor)) return "As cores do texto precisam estar no formato #RRGGBB.";
+  if (t.boxColor !== undefined && !HEX.test(t.boxColor)) return "A cor da faixa precisa estar no formato #RRGGBB.";
+  if (t.boxOpacity !== undefined && (t.boxOpacity < 0 || t.boxOpacity > 1)) return "A opacidade da faixa precisa ficar entre 0 e 1.";
+  if (t.strokeWidth < 0 || t.strokeWidth > 40) return "O contorno precisa ficar entre 0 e 40.";
+  if (t.start < 0 || t.fadeIn < 0 || t.fadeOut < 0) return "Os tempos do texto não podem ser negativos.";
+  if (t.end !== null) {
+    if (t.end <= t.start) return "O texto precisa terminar depois de começar.";
+    if (t.fadeIn + t.fadeOut > t.end - t.start) return "Os fades do texto são mais longos que o tempo em tela.";
+  }
+  return null;
+}
+
+function validateAudio(a: EditorTemplateAudio): string | null {
+  if ((a.mode === "replace" || a.mode === "mix") && !a.music) {
+    return "Escolha uma música para substituir ou misturar o áudio.";
+  }
+  if (a.originalVolume < 0 || a.originalVolume > 2 || a.musicVolume < 0 || a.musicVolume > 2) {
+    return "Os volumes precisam ficar entre 0 e 200%.";
+  }
+  return null;
+}
 
 /** A logo tem posição própria; sem ela configurada, usa o padrão. */
 export function logoRect(config: EditorTemplateConfig): PixelRect {
@@ -188,6 +266,14 @@ export function validateTemplateConfig(config: EditorTemplateConfig): string | n
     if (logo.y + logo.height > config.canvasHeight) {
       return "A logo ultrapassa a borda inferior do canvas.";
     }
+  }
+  if (config.text) {
+    const erro = validateText(config.text, config);
+    if (erro) return erro;
+  }
+  if (config.audio) {
+    const erro = validateAudio(config.audio);
+    if (erro) return erro;
   }
   return null;
 }

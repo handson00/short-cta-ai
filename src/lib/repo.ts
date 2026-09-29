@@ -1144,28 +1144,6 @@ export function getSourceCapture(videoId: string): SourceCapture | null {
 
 // ------------------------- Fila de Captura em Lote --------------------------
 
-/**
- * Garante que a tabela capture_queue existe. Chamada lazy na primeira operação.
- */
-let captureQueueInitialized = false;
-function ensureCaptureQueue(): void {
-  if (captureQueueInitialized) return;
-  db().exec(`
-    CREATE TABLE IF NOT EXISTS capture_queue (
-      id TEXT PRIMARY KEY,
-      video_id TEXT NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
-      url TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'pending',
-      attempts INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      completed_at TEXT
-    )
-  `);
-  db().exec(`CREATE INDEX IF NOT EXISTS idx_capture_queue_status ON capture_queue(status)`);
-  captureQueueInitialized = true;
-}
-
 export interface CaptureQueueItem {
   id: string;
   videoId: string;
@@ -1177,9 +1155,14 @@ export interface CaptureQueueItem {
   completedAt: string | null;
 }
 
-/** Adiciona vídeos à fila de captura. Ignora duplicatas já pendentes. */
+/**
+ * Adiciona vídeos à fila de captura e devolve quantos entraram de fato.
+ *
+ * Vídeo que já tem pedido aberto é ignorado: o índice único
+ * `idx_capture_queue_one_open` (criado em db.ts) é o que faz o `OR IGNORE`
+ * funcionar. Sem ele, cada clique enfileirava o vídeo de novo.
+ */
 export function addToCaptureQueue(items: Array<{ videoId: string; url: string }>): number {
-  ensureCaptureQueue();
   const agora = nowIso();
   let added = 0;
   const insert = db().prepare(
@@ -1198,7 +1181,6 @@ export function addToCaptureQueue(items: Array<{ videoId: string; url: string }>
 
 /** Retorna os próximos itens pendentes para a extensão processar. */
 export function getPendingCaptures(limit: number = 5): CaptureQueueItem[] {
-  ensureCaptureQueue();
   const rows = db()
     .prepare(
       `SELECT id, video_id, url, status, attempts, created_at, updated_at, completed_at
@@ -1231,7 +1213,6 @@ export function getPendingCaptures(limit: number = 5): CaptureQueueItem[] {
 
 /** Marca um item da fila como concluído. */
 export function completeCaptureQueueItem(id: string): void {
-  ensureCaptureQueue();
   const agora = nowIso();
   db()
     .prepare(`UPDATE capture_queue SET status = 'done', completed_at = ?, updated_at = ? WHERE id = ?`)
@@ -1240,7 +1221,6 @@ export function completeCaptureQueueItem(id: string): void {
 
 /** Marca um item da fila como erro (incrementa tentativas). */
 export function failCaptureQueueItem(id: string): void {
-  ensureCaptureQueue();
   const agora = nowIso();
   db()
     .prepare(
@@ -1252,7 +1232,6 @@ export function failCaptureQueueItem(id: string): void {
 
 /** Retorna resumo da fila para exibição na UI. */
 export function captureQueueSummary(): { pending: number; processing: number; done: number; error: number } {
-  ensureCaptureQueue();
   const rows = db()
     .prepare(`SELECT status, COUNT(*) as n FROM capture_queue GROUP BY status`)
     .all() as Array<{ status: string; n: number }>;
