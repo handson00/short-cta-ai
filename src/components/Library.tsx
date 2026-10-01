@@ -39,6 +39,7 @@ export default function Library() {
   const [bulkCapturing, setBulkCapturing] = useState(false);
   const [bulkSending, setBulkSending] = useState(false);
   const [bulkReanalyzing, setBulkReanalyzing] = useState(false);
+  const [retryingFailed, setRetryingFailed] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const folderRef = useRef<HTMLInputElement>(null);
 
@@ -280,6 +281,36 @@ export default function Library() {
     }
   }
 
+  /**
+   * Retoma só os vídeos que falharam, no mesmo modo em que pararam.
+   *
+   * Quem acha os vídeos é o servidor: a tela pode estar filtrada, e "os que
+   * falharam" tem que ser todos eles. O caso que motivou isto é a cota do
+   * plano gratuito acabando no meio de um lote grande.
+   */
+  async function retryFailed() {
+    setRetryingFailed(true);
+    try {
+      const res = await fetch("/api/videos/retry-failed", { method: "POST" });
+      const data = (await res.json().catch(() => ({}))) as {
+        queuedCount?: number;
+        skipped?: { reason: string }[];
+        error?: string;
+      };
+      if (!res.ok) {
+        alert(data.error ?? "Falha ao reenfileirar.");
+        return;
+      }
+      const pulados = data.skipped?.length ? ` ${data.skipped.length} pulado(s): ${data.skipped[0].reason}` : "";
+      alert(`${data.queuedCount ?? 0} vídeo(s) voltaram para a fila.${pulados}`);
+      await refresh();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Falha ao reenfileirar.");
+    } finally {
+      setRetryingFailed(false);
+    }
+  }
+
   async function sendSelectedToEditor() {
     const ids = [...selectedIds];
     if (ids.length === 0) return;
@@ -406,6 +437,26 @@ export default function Library() {
                 style={{ width: `${queue.total ? (queue.done / queue.total) * 100 : 0}%` }}
               />
             </div>
+
+            {queue.error > 0 && (
+              <div className="mt-1 space-y-1 rounded-md border border-red-900/50 bg-red-950/20 p-1.5">
+                {(queue.failedByCode.quota_exhausted ?? 0) > 0 && (
+                  <p className="text-[10px] text-amber-300">
+                    {queue.failedByCode.quota_exhausted} parou por cota esgotada do plano gratuito. Espere a cota
+                    renovar e clique abaixo.
+                  </p>
+                )}
+                <button
+                  className="btn w-full bg-amber-600/90 py-0.5 text-[10px] text-white hover:bg-amber-600 disabled:opacity-50"
+                  onClick={() => void retryFailed()}
+                  disabled={retryingFailed}
+                  title="Reenfileira só os vídeos que falharam, cada um no mesmo modo em que parou"
+                >
+                  {retryingFailed ? "Enfileirando…" : `↻ Terminar os ${queue.error} com erro`}
+                </button>
+              </div>
+            )}
+
             {(queue.queued > 0 || queue.active > 0) && (
               <button className="btn-ghost text-red-400 text-[10px] w-full mt-1" onClick={cancelAll}>
                 Cancelar processos

@@ -75,6 +75,11 @@ export interface QueueOverview {
   error: number;
   canceled: number;
   byStatus: Record<string, number>;
+  /**
+   * Quantos dos que falharam têm cada código de erro. Serve para a tela dizer
+   * POR QUE pararam — "cota esgotada" se resolve esperando; outro erro, não.
+   */
+  failedByCode: Record<string, number>;
 }
 
 export interface VideoDetail extends VideoSummary {

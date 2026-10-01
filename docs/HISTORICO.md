@@ -2452,3 +2452,33 @@ com emoji, corpo, convite a ver até o fim), em ~1,2 s cada.
 
 **Nada desde `c59d36a` foi commitado** — §23 a §38, mais de 70 arquivos, dois
 dias de trabalho só no disco. Está no topo do §9 do HANDOFF.
+
+## 39. "Terminar os N com erro" na Fila (2026-10-01)
+
+Caso real: o usuário mandou os 98 vídeos para "Gerar CTAs" com o Gemini
+gratuito. **87 concluíram e 11 pararam com `quota_exhausted`** — a cota diária
+do plano gratuito acabou no meio do lote. Para terminar, ele teria de achar os
+11 na lista e selecionar um a um.
+
+Agora o bloco "Progresso" mostra, quando há erro:
+
+- quantos pararam **por cota esgotada**, com a instrução de esperar a cota
+  renovar (os outros códigos de erro pedem outra ação, por isso são separados);
+- o botão **"↻ Terminar os N com erro"**.
+
+Decisões:
+
+- **Quem acha os vídeos é o servidor** (`repo.listFailedVideos`), não o
+  navegador: a tela pode estar filtrada, e "os que falharam" tem que ser todos.
+- **Cada vídeo volta no MODO em que parou** (`local`, `ai` ou `full`). Um vídeo
+  que falhou na parte local não pode, ao ser retomado, passar a gastar chamadas
+  de IA que ninguém pediu — mesma regra do "Tentar novamente" individual.
+- **Só o último job conta.** `listFailedVideos` desempata por `rowid`, como
+  `latestJob` (§32): um vídeo que falhou e já foi retomado não aparece de novo,
+  e dois cliques não duplicam nada.
+- `QueueOverview` ganhou `failedByCode`, para a tela dizer **por que** pararam.
+  "Cota esgotada" se resolve esperando; "arquivo não encontrado", não.
+
+Verificado: typecheck, 466/466 (5 novos em `tests/retomarFalhados.test.ts`,
+incluindo o modo preservado e o duplo clique). **Não verificado:** o botão
+clicado na tela — depende do build e de a cota do usuário renovar.

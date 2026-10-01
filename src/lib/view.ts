@@ -89,6 +89,11 @@ export function queueOverview(): QueueOverview {
     canceled: byStatus.canceled ?? 0,
     active: sum(["extracting_media", "transcribing", "reading_text", "analyzing_scene", "identifying_work", "generating_ctas"]),
     byStatus,
+    failedByCode: repo.listFailedVideos().reduce<Record<string, number>>((acc, v) => {
+      const code = v.errorCode ?? "desconhecido";
+      acc[code] = (acc[code] ?? 0) + 1;
+      return acc;
+    }, {}),
   };
 }
 

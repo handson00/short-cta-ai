@@ -311,6 +311,28 @@ export function requestReanalysis(ids: string[], mode: JobMode = "full"): {
   return { queued, skipped };
 }
 
+/**
+ * Vídeos cujo último job terminou com erro, com o modo e o motivo.
+ *
+ * O desempate por `rowid` é o mesmo de `latestJob`: dois jobs criados no mesmo
+ * milissegundo empatam em `created_at`, e o empate traria o job errado.
+ */
+export function listFailedVideos(): Array<{ id: string; mode: JobMode; errorCode: string | null }> {
+  const rows = db()
+    .prepare(
+      `SELECT j.video_id, j.mode, j.error_code FROM analysis_jobs j
+       WHERE j.status = 'error'
+         AND j.rowid = (SELECT j2.rowid FROM analysis_jobs j2 WHERE j2.video_id = j.video_id
+                        ORDER BY j2.created_at DESC, j2.rowid DESC LIMIT 1)`,
+    )
+    .all() as Array<{ video_id: string; mode: string | null; error_code: string | null }>;
+  return rows.map((r) => ({
+    id: r.video_id,
+    mode: r.mode === "local" || r.mode === "ai" ? r.mode : "full",
+    errorCode: r.error_code,
+  }));
+}
+
 export function getJob(id: string): JobRecord | null {
   const row = db().prepare("SELECT * FROM analysis_jobs WHERE id = ?").get(id) as JobRow | undefined;
   return row ? mapJob(row) : null;

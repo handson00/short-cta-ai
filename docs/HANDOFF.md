@@ -84,7 +84,7 @@ Senha de acesso: `APP_PASSWORD` no `.env.local`.
 | `npm run backfill:source` | Recalcula plataforma/ID/link dos vídeos já importados |
 | `npm run mock:ghostcli` | Sobe um servidor falso da API, para rodar sem credencial |
 | `npm run worker` | Worker de análise em processo separado (exige `WORKER_IN_PROCESS=false`) |
-| `npm test` | 461 testes |
+| `npm test` | 466 testes |
 | `npm run typecheck` | `tsc --noEmit` |
 
 ### Armadilhas do ambiente — cada uma já custou horas
@@ -352,7 +352,7 @@ src/
 1. `git status` — confirme que a árvore está limpa antes de mexer em qualquer
    coisa.
 2. `npm run doctor` — veja o ambiente pelos olhos da aplicação.
-3. `npm test` — devem passar 461/461.
+3. `npm test` — devem passar 466/466.
 4. Os comandos rodam direto no Windows (PowerShell): dá para rodar build,
    testes e o servidor daqui.
 5. Pendências por ordem de valor:
