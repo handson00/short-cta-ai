@@ -1,6 +1,16 @@
 import { z } from "zod";
-import { type CtaOptions, type CtaResult, type CtaStyle, type CtaSuggestion, type SceneAnalysis } from "../types";
+import {
+  type CtaOptions,
+  type CtaResult,
+  type CtaStyle,
+  type CtaSuggestion,
+  type KeyLine,
+  type SceneAnalysis,
+  type Transcript,
+} from "../types";
 import { dedupeSuggestions, evaluateCta, isGeneric, MAX_CHARS, similarity, styleDistribution } from "./ctaPlan";
+import { normalizeText } from "./ctaDetection";
+import { GENERICAS, normalizeTag } from "./hashtagRank";
 
 /**
  * O modelo pode devolver JSON invalido, com campos a mais, com aspas tortas ou
@@ -75,8 +85,18 @@ const workSchema = z
   })
   .nullable();
 
+const keyLineSchema = z.object({
+  atSeconds: z.number().min(0).max(100_000).nullable().catch(null),
+  text: z.string().trim().min(2).max(300),
+  why: z.string().trim().max(300).nullable().catch(null),
+});
+
 const sceneAnalysisSchema = z.object({
   sceneSummary: z.string().trim().min(1).max(600),
+  // .catch: um modelo que esqueça o campo novo não derruba a análise inteira;
+  // sem enredo, a geração segue com o resumo, como antes.
+  plot: z.string().trim().min(1).max(900).nullable().catch(null),
+  keyLines: z.array(keyLineSchema.catch({ atSeconds: null, text: "", why: null })).max(8).catch([]),
   analysisLimitations: z.array(z.string().trim().max(300)).max(12).catch([]),
   conflict: z.string().trim().max(400).nullable().catch(null),
   curiosity: z.string().trim().max(400).nullable().catch(null),
@@ -95,7 +115,33 @@ const sceneAnalysisSchema = z.object({
   work: workSchema.catch(null),
 });
 
-export function parseSceneAnalysis(raw: unknown): SceneAnalysis {
+/**
+ * Mínimo de palavras da fala-chave que precisam estar na transcrição. Abaixo
+ * disso a "fala" é paráfrase do modelo ou invenção, não citação.
+ */
+export const KEY_LINE_MIN_OVERLAP = 0.7;
+
+/**
+ * Só fica a fala-chave que está de verdade na transcrição.
+ *
+ * O modelo foi pedido a citar literalmente, mas nada o obriga: uma "fala"
+ * inventada apareceria na tela com cara de citação e alimentaria o CTA como se
+ * fosse evidência. A conferência é por palavras (sem acento nem pontuação),
+ * tolerando as pequenas diferenças de transcrição que o próprio modelo corrige.
+ * Sem fala na transcrição, não há fala-chave possível.
+ */
+export function groundKeyLines(lines: KeyLine[], transcript: Transcript | null | undefined): KeyLine[] {
+  if (!transcript?.hasSpeech) return [];
+  const heard = new Set(normalizeText(transcript.segments.map((s) => s.text).join(" ")).split(" ").filter(Boolean));
+  return lines.filter((line) => {
+    const words = normalizeText(line.text).split(" ").filter((w) => w.length > 1);
+    if (words.length === 0) return false;
+    const found = words.filter((w) => heard.has(w)).length;
+    return found / words.length >= KEY_LINE_MIN_OVERLAP;
+  });
+}
+
+export function parseSceneAnalysis(raw: unknown, transcript?: Transcript | null): SceneAnalysis {
   const result = sceneAnalysisSchema.safeParse(raw);
   if (!result.success) {
     throw new InvalidModelOutput(
@@ -119,8 +165,19 @@ export function parseSceneAnalysis(raw: unknown): SceneAnalysis {
       }
     : null;
 
+  const hasSpeech = Boolean(transcript?.hasSpeech);
   return {
     sceneSummary: value.sceneSummary,
+    // Enredo "pela fala" sem fala recebida seria o modelo contando uma história
+    // que não ouviu: descartado, e a tela diz que não houve fala.
+    plot: hasSpeech ? (value.plot ?? null) : null,
+    keyLines: groundKeyLines(
+      value.keyLines
+        .filter((l) => l.text)
+        .map((l) => ({ atSeconds: l.atSeconds ?? null, text: l.text, why: l.why ?? null })),
+      transcript,
+    ),
+    evidenceBasis: hasSpeech ? "dialogue" : "visual_only",
     analysisLimitations: value.analysisLimitations ?? [],
     conflict: value.conflict ?? null,
     curiosity: value.curiosity ?? null,
@@ -167,10 +224,33 @@ export interface ValidatedCtaResult extends CtaResult {
  * Quando a recomendacao do modelo nao se sustenta, promovemos o melhor
  * candidato pelos criterios da secao 6.3 em vez de perder o job inteiro.
  */
+/** Palavras longas que não ancoram nada: estão em quase qualquer frase. */
+const STOPWORDS = new Set([
+  "ESTA", "ESTE", "ESSA", "ESSE", "ISSO", "ISTO", "AQUI", "PARA", "COMO", "MAIS", "MUITO", "MUITA", "ELES", "ELAS",
+  "DELE", "DELA", "QUANDO", "ONDE", "PORQUE", "ENTAO", "DEPOIS", "ANTES", "AINDA", "TODO", "TODA", "TODOS", "TODAS",
+  "NADA", "TUDO", "SOBRE", "ENTRE", "SEUS", "SUAS", "NOSSO", "NOSSA", "VOCE", "VOCES", "ESTAO", "ESTAVA", "TINHA",
+  "SERIA", "FOSSE", "PODE", "PODIA", "QUER", "QUERIA", "VAI", "VAMOS", "SENDO", "TENDO", "FAZER", "FEZ", "COISA",
+]);
+
+/** Palavras do que foi dito: a transcrição e o enredo que saiu dela. */
+function heardWords(transcript: Transcript | null | undefined, analysis: SceneAnalysis): Set<string> {
+  if (!transcript?.hasSpeech) return new Set();
+  const text = [...transcript.segments.map((s) => s.text), analysis.plot ?? ""].join(" ");
+  return new Set(normalizeText(text).split(" ").filter((w) => w.length >= 4 && !STOPWORDS.has(w)));
+}
+
+/** Quantas palavras de conteúdo do gancho estão no que foi dito. */
+export function speechAnchor(text: string, heard: Set<string>): number {
+  if (heard.size === 0) return 0;
+  return [...new Set(normalizeText(text).split(" "))].filter((w) => w.length >= 4 && !STOPWORDS.has(w) && heard.has(w))
+    .length;
+}
+
 export function validateCtaResult(
   raw: unknown,
   options: CtaOptions,
   analysis: SceneAnalysis,
+  transcript: Transcript | null = null,
 ): ValidatedCtaResult {
   const parsed = ctaResultSchema.safeParse(raw);
   if (!parsed.success) {
@@ -210,7 +290,15 @@ export function validateCtaResult(
     if (got === 0) issues.push(`Nenhuma sugestão do estilo ${style}.`);
   }
 
-  const sceneTerms = [analysis.sceneSummary, analysis.conflict ?? "", analysis.curiosity ?? ""]
+  // O enredo e as falas-chave entram primeiro: são o que ancora o gancho na
+  // história, não só na descrição da cena.
+  const sceneTerms = [
+    analysis.plot ?? "",
+    ...(analysis.keyLines ?? []).map((l) => l.text),
+    analysis.sceneSummary,
+    analysis.conflict ?? "",
+    analysis.curiosity ?? "",
+  ]
     .join(" ")
     .split(/\s+/)
     .filter((w: any) => w.length > 4)
@@ -241,6 +329,38 @@ export function validateCtaResult(
     issues.push("A recomendação do modelo não passou na validação; promovemos o melhor candidato.");
   } else if (matched) {
     recommendedText = matched.text;
+  }
+
+  // O PRINCIPAL é curiosidade apoiada na fala (pedido do usuário, 2026-09-29).
+  // O prompt pede isso ao modelo; aqui é garantido: se a escolha dele não é de
+  // curiosidade, ou não toca em nada do que foi dito, promove-se a sugestão de
+  // curiosidade mais ancorada na transcrição.
+  const heard = heardWords(transcript, analysis);
+  const hasSpeech = heard.size > 0;
+  const eligible = (s: CtaSuggestion) => s.style === "curiosidade" && (!hasSpeech || speechAnchor(s.text, heard) > 0);
+  const current = suggestions.find((s) => s.text === recommendedText);
+  if (!current || !eligible(current)) {
+    const pool = scored
+      .filter(({ cta }) => eligible(cta))
+      .sort((a, b) => speechAnchor(b.cta.text, heard) - speechAnchor(a.cta.text, heard) || b.evaluation.total - a.evaluation.total);
+    if (pool.length > 0) {
+      recommendedText = pool[0].cta.text;
+      recommendedReason =
+        pool[0].cta.reason ??
+        (hasSpeech ? "Abre a curiosidade a partir do que é dito no vídeo." : "Melhor gancho de curiosidade entre as opções.");
+      recommendationReplaced = true;
+      issues.push(
+        hasSpeech
+          ? "A recomendação passou a ser o gancho de curiosidade mais apoiado na fala."
+          : "A recomendação passou a ser o melhor gancho de curiosidade.",
+      );
+    } else {
+      issues.push(
+        hasSpeech
+          ? "Nenhuma sugestão de curiosidade se apoia na fala; a recomendação ficou com a melhor disponível."
+          : "Nenhuma sugestão de curiosidade veio; a recomendação ficou com a melhor disponível.",
+      );
+    }
   }
 
   if (!suggestions.some((s: any) => s.text === recommendedText)) {
@@ -366,6 +486,102 @@ export function validatePublishKit(raw: unknown): PublishKitResult {
   };
 }
 
+
+// ----------------------------- Hashtags por IA ------------------------------
+
+export interface AiHashtag {
+  tag: string;
+  reason: string | null;
+}
+
+const hashtagsSchema = z.object({
+  hashtags: z
+    .array(
+      z.object({
+        tag: z.string().trim().min(2).max(60),
+        reason: z.string().trim().max(200).nullish(),
+      }),
+    )
+    .min(1)
+    .max(12),
+});
+
+/**
+ * Valida e limpa as hashtags geradas.
+ *
+ * Duas regras não são negociáveis, e por isso ficam no servidor e não só no
+ * prompt: hashtag de volume (#viral, #fyp) não entra — ela mistura o vídeo com
+ * qualquer assunto —, e nenhuma repete as que o vídeo já tem. O modelo foi
+ * instruído nas duas; nada o obriga a obedecer.
+ */
+export function validateHashtags(raw: unknown, existing: string[], limit: number): AiHashtag[] {
+  const parsed = hashtagsSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new InvalidModelOutput(
+      "As hashtags não seguiram o contrato de saída",
+      parsed.error.issues.map((i) => `${i.path.join(".") || "raiz"}: ${i.message}`),
+    );
+  }
+
+  const jaTem = new Set(existing.map(normalizeTag));
+  const vistas = new Set<string>();
+  const out: AiHashtag[] = [];
+
+  for (const h of parsed.data.hashtags) {
+    const tag = normalizeTag(h.tag);
+    if (tag.length < 2 || GENERICAS.has(tag)) continue;
+    if (jaTem.has(tag) || vistas.has(tag)) continue;
+    vistas.add(tag);
+    out.push({ tag: `#${tag}`, reason: h.reason?.trim() || null });
+    if (out.length >= limit) break;
+  }
+
+  if (out.length === 0) {
+    throw new InvalidModelOutput("Nenhuma hashtag nova e específica sobrou depois da validação", [
+      "todas eram genéricas de volume ou repetiam as que o vídeo já tem",
+    ]);
+  }
+  return out;
+}
+
+// ------------------------- Legenda em japonês -------------------------------
+
+const japaneseCaptionSchema = z.object({ caption: z.string().trim().min(5).max(2000) });
+
+/** Hiragana, katakana ou kanji: o que prova que a resposta saiu em japonês. */
+const JAPANESE = /[぀-ゟ゠-ヿ一-龯]/;
+
+/**
+ * Valida a legenda japonesa e garante a hashtag fixa na primeira linha.
+ *
+ * As duas conferências existem porque o prompt sozinho não obriga nada: um
+ * modelo pode responder em português (e a legenda perderia a razão de ser) ou
+ * esquecer a hashtag — que, pelo pedido do usuário, nunca pode faltar.
+ */
+export function validateJapaneseCaption(raw: unknown, hashtag: string): string {
+  const parsed = japaneseCaptionSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new InvalidModelOutput(
+      "A legenda em japonês não seguiu o contrato de saída",
+      parsed.error.issues.map((i) => `${i.path.join(".") || "raiz"}: ${i.message}`),
+    );
+  }
+
+  const caption = parsed.data.caption.replace(/\r\n/g, "\n").trim();
+  if (!JAPANESE.test(caption)) {
+    throw new InvalidModelOutput("A legenda não veio em japonês", [caption.slice(0, 120)]);
+  }
+
+  const tag = hashtag.trim();
+  if (!tag) return caption;
+  // Já tem a hashtag em algum lugar: só garante que ela abre o texto.
+  const semTag = caption.replace(new RegExp(`^\\s*${escapeRegex(tag)}\\s*`, "i"), "");
+  return caption.toLowerCase().startsWith(tag.toLowerCase()) ? `${tag} ${semTag}`.trim() : `${tag} ${caption}`;
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 // ----------------------- Optimized Comment CTA Result -----------------------
 

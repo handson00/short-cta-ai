@@ -38,6 +38,8 @@ const Payload = z.object({
   postUrl: z.string().min(5).max(2048),
   comments: z.array(Comentario).max(MAX_COMENTARIOS),
   hashtags: Hashtags,
+  /** Pedaço 2 em diante da mesma captura: soma aos já gravados, não substitui. */
+  append: z.boolean().optional(),
 });
 
 function corsHeaders(): Record<string, string> {
@@ -117,9 +119,11 @@ export async function POST(request: Request) {
     );
   }
 
-  const gravados = repo.replaceComments(video.id, ref.platform, parsed.data.comments);
+  const gravados = repo.replaceComments(video.id, ref.platform, parsed.data.comments, {
+    append: parsed.data.append === true,
+  });
 
-  // Salvar hashtags se fornecidas
+  // Listas vazias (pedaços 2+) são ignoradas em saveVideoHashtags.
   if (parsed.data.hashtags) {
     repo.saveVideoHashtags(video.id, parsed.data.hashtags);
   }

@@ -1,5 +1,5 @@
 import { db, nowIso } from "../db";
-import type { JobStatus } from "../types";
+import type { JobMode, JobStatus } from "../types";
 
 /**
  * Controle de lease do job. Fica separado da fila para evitar import circular
@@ -14,6 +14,8 @@ export interface ClaimedJob {
   attempts: number;
   maxAttempts: number;
   reuseScene: boolean;
+  /** Ausente em jobs montados à mão (testes): vale como "full". */
+  mode?: JobMode;
 }
 
 export function heartbeat(jobId: string): void {

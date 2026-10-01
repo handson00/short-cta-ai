@@ -1,15 +1,21 @@
-import type { AIProvider, CtaOptions, CtaResult, SceneAnalysis, SceneContext } from "../../types";
-import type { AppSettings } from "../../settings";
-import { analysisSystemPrompt, buildAnalysisUserMessage, buildCommentCtaUserMessage, buildGenerationUserMessage, buildPublishKitUserMessage, buildViralHashtagsUserMessage, commentCtaSystemPrompt, publishKitSystemPrompt, generationSystemPrompt, optimizedCommentCtaSystemPrompt, buildOptimizedCommentCtaUserMessage, viralHashtagsSystemPrompt, PROMPT_VERSION } from "../../prompts";
-import { extractJson, InvalidModelOutput, parseSceneAnalysis, validateCommentCtaResult, validateCtaResult, validatePublishKit, validateOptimizedCommentCtaResult, type CommentCtaResult, type PublishKitResult, type ValidatedCtaResult, type OptimizedCommentCtaResult } from "../../pipeline/validation";
+import type { AIProvider, CtaOptions, CtaResult, SceneAnalysis, SceneContext, Transcript } from "../../types";
+import type { AiProfile, AppSettings } from "../../settings";
+import { analysisSystemPrompt, buildAnalysisUserMessage, buildCommentCtaUserMessage, buildGenerationUserMessage, buildPublishKitUserMessage, commentCtaSystemPrompt, publishKitSystemPrompt, generationSystemPrompt, hashtagsSystemPrompt, buildHashtagsUserMessage, japaneseCaptionSystemPrompt, optimizedCommentCtaSystemPrompt, buildOptimizedCommentCtaUserMessage, PROMPT_VERSION } from "../../prompts";
+import { extractJson, InvalidModelOutput, parseSceneAnalysis, validateCommentCtaResult, validateCtaResult, validatePublishKit, validateOptimizedCommentCtaResult, validateHashtags, validateJapaneseCaption, type AiHashtag, type CommentCtaResult, type PublishKitResult, type ValidatedCtaResult, type OptimizedCommentCtaResult } from "../../pipeline/validation";
 import type { CommentInsights } from "../../pipeline/commentInsights";
-import { chatCompletion, type ChatMessage, type ClientConfig, type ToolDefinition } from "./client";
-import { AiError, detailedMessage } from "./errors";
+import { chatCompletion, type ChatMessage, type ChatRequest, type ClientConfig, type ToolDefinition } from "./client";
+import { AiError, detailedMessage, type AiErrorCode } from "./errors";
 import { logAiRequest } from "../../aiLog";
 import { searchProvider } from "../search";
 
+/**
+ * O provedor de IA do projeto. GhostCLI e Google Gemini falam o mesmo formato
+ * (Chat Completions); o `profile` diz qual deles, com endereço e modelos. Os
+ * prompts e a validação da resposta são os mesmos para os dois.
+ */
 export interface ProviderContext {
   settings: AppSettings;
+  profile: AiProfile;
   apiKey: string;
   videoId?: string | null;
   jobId?: string | null;
@@ -42,21 +48,31 @@ const SEARCH_TOOL: ToolDefinition = {
 
 const MAX_TOOL_ROUNDS = 3;
 
-export class GhostCliProvider implements AIProvider {
+/**
+ * Espera do modelo escolhido quando há reserva. Uma geração de CTAs normal no
+ * Gemini sai bem antes disso; passou daqui, o reserva responde mais rápido do
+ * que continuar esperando.
+ */
+const PRIMARY_TIMEOUT_MS = 45_000;
+
+/** Falhas em que outro modelo resolve. Chave recusada ou pedido inválido, não. */
+const FALLBACK_ON: AiErrorCode[] = ["server_error", "timeout", "rate_limited", "quota_exhausted"];
+
+export class ChatCompletionsProvider implements AIProvider {
   constructor(private readonly ctx: ProviderContext) {}
 
   private config(): ClientConfig {
     return {
-      baseUrl: this.ctx.settings.ghostcli.baseUrl,
+      baseUrl: this.ctx.profile.baseUrl,
       apiKey: this.ctx.apiKey,
-      authHeader: this.ctx.settings.ghostcli.authHeader,
-      timeoutMs: this.ctx.settings.ghostcli.timeoutMs,
-      maxRetries: this.ctx.settings.ghostcli.maxRetries,
+      authHeader: this.ctx.profile.authHeader,
+      timeoutMs: this.ctx.profile.timeoutMs,
+      maxRetries: this.ctx.profile.maxRetries,
     };
   }
 
   async analyzeScene(input: SceneContext): Promise<SceneAnalysis> {
-    const model = this.ctx.settings.ghostcli.analysisModel;
+    const model = this.ctx.profile.analysisModel;
     const useSearch =
       this.ctx.settings.toggles.identifyWork &&
       this.ctx.settings.toggles.externalSearch &&
@@ -73,17 +89,19 @@ export class GhostCliProvider implements AIProvider {
       model,
       messages,
       content,
-      (raw) => parseSceneAnalysis(extractJson(raw)),
+      // A transcrição vai junto para conferir as falas-chave e para decidir se o
+      // enredo vale: ele só existe se a análise recebeu fala.
+      (raw) => parseSceneAnalysis(extractJson(raw), input.transcript),
     );
 
     return { ...analysis, context: input };
   }
 
-  async generateCtas(input: SceneAnalysis, options: CtaOptions): Promise<CtaResult> {
-    const model = this.ctx.settings.ghostcli.generationModel;
+  async generateCtas(input: SceneAnalysis, options: CtaOptions, transcript: Transcript | null = null): Promise<CtaResult> {
+    const model = this.ctx.profile.generationModel;
     const messages: ChatMessage[] = [
       { role: "system", content: generationSystemPrompt(options) },
-      { role: "user", content: buildGenerationUserMessage(input, options) },
+      { role: "user", content: buildGenerationUserMessage(input, options, transcript) },
     ];
 
     const content = await this.converse("generate_ctas", model, messages, false, options.creativity);
@@ -92,7 +110,7 @@ export class GhostCliProvider implements AIProvider {
       model,
       messages,
       content,
-      (raw) => validateCtaResult(extractJson(raw), options, input),
+      (raw) => validateCtaResult(extractJson(raw), options, input, transcript),
     );
     return validated;
   }
@@ -102,7 +120,7 @@ export class GhostCliProvider implements AIProvider {
     analysis: SceneAnalysis | null,
     count: number,
   ): Promise<CommentCtaResult> {
-    const model = this.ctx.settings.ghostcli.generationModel;
+    const model = this.ctx.profile.generationModel;
     const messages: ChatMessage[] = [
       { role: "system", content: commentCtaSystemPrompt(count) },
       { role: "user", content: buildCommentCtaUserMessage(insights, analysis) },
@@ -114,12 +132,44 @@ export class GhostCliProvider implements AIProvider {
     );
   }
 
+  async generateHashtags(
+    context: Parameters<AIProvider["generateHashtags"]>[0],
+    existing: string[],
+    count: number,
+  ): Promise<AiHashtag[]> {
+    const model = this.ctx.profile.generationModel;
+    const messages: ChatMessage[] = [
+      { role: "system", content: hashtagsSystemPrompt(count, existing) },
+      { role: "user", content: buildHashtagsUserMessage(context) },
+    ];
+    const content = await this.converse("hashtags", model, messages, false);
+    return this.parseOrRepair<AiHashtag[]>("hashtags", model, messages, content, (raw) =>
+      validateHashtags(extractJson(raw), existing, count),
+    );
+  }
+
+  async generateJapaneseCaption(
+    context: Parameters<AIProvider["generateHashtags"]>[0],
+    hashtag: string,
+  ): Promise<string> {
+    const model = this.ctx.profile.generationModel;
+    const messages: ChatMessage[] = [
+      { role: "system", content: japaneseCaptionSystemPrompt(hashtag) },
+      // A mesma montagem de evidências das hashtags: o vídeo é o mesmo.
+      { role: "user", content: buildHashtagsUserMessage(context) },
+    ];
+    const content = await this.converse("legenda_japones", model, messages, false);
+    return this.parseOrRepair<string>("legenda_japones", model, messages, content, (raw) =>
+      validateJapaneseCaption(extractJson(raw), hashtag),
+    );
+  }
+
   async generatePublishKit(
     insights: CommentInsights | null,
     analysis: SceneAnalysis | null,
     existingCta: string | null,
   ): Promise<PublishKitResult> {
-    const model = this.ctx.settings.ghostcli.generationModel;
+    const model = this.ctx.profile.generationModel;
     const messages: ChatMessage[] = [
       { role: "system", content: publishKitSystemPrompt() },
       { role: "user", content: buildPublishKitUserMessage(insights, analysis, existingCta) },
@@ -135,7 +185,7 @@ export class GhostCliProvider implements AIProvider {
     analysis: SceneAnalysis | null,
     count: number,
   ): Promise<OptimizedCommentCtaResult> {
-    const model = this.ctx.settings.ghostcli.generationModel;
+    const model = this.ctx.profile.generationModel;
     const messages: ChatMessage[] = [
       { role: "system", content: optimizedCommentCtaSystemPrompt(count) },
       { role: "user", content: buildOptimizedCommentCtaUserMessage(insights, analysis) },
@@ -151,40 +201,6 @@ export class GhostCliProvider implements AIProvider {
     );
   }
 
-  async generateViralHashtags(
-    insights: CommentInsights | null,
-    analysis: SceneAnalysis | null,
-    capturedHashtags: { doVideo: string[]; nosComentarios: Array<{ tag: string; vezes: number }>; todas: string[] },
-    count: number,
-  ): Promise<{ hashtags: string[]; reasoning: string | null }> {
-    const model = this.ctx.settings.ghostcli.generationModel;
-    const messages: ChatMessage[] = [
-      { role: "system", content: viralHashtagsSystemPrompt(count) },
-      { role: "user", content: buildViralHashtagsUserMessage(insights, analysis, capturedHashtags) },
-    ];
-
-    const content = await this.converse("viral_hashtags", model, messages, false);
-    const parsed = extractJson(content) as { hashtags?: unknown[]; reasoning?: unknown } | null;
-    const hashtags = Array.isArray(parsed?.hashtags) ? parsed.hashtags.filter((h: unknown): h is string => typeof h === "string") : [];
-    const reasoning = typeof parsed?.reasoning === "string" ? parsed.reasoning : null;
-
-    if (hashtags.length === 0) {
-      throw new AiError("invalid_output", "O modelo não retornou nenhuma hashtag válida.");
-    }
-
-    logAiRequest({
-      videoId: this.ctx.videoId ?? null,
-      operation: "viral_hashtags",
-      model,
-      promptTokens: null,
-      completionTokens: null,
-      durationMs: 0,
-      status: "ok",
-      errorMessage: null,
-    });
-
-    return { hashtags, reasoning };
-  }
   /** Roda a conversa, resolvendo chamadas de ferramenta no servidor. */
   private async converse(
     operation: string,
@@ -243,6 +259,17 @@ export class GhostCliProvider implements AIProvider {
     }
   }
 
+  /**
+   * Uma chamada ao modelo, com o modelo reserva quando o perfil tem um.
+   *
+   * No Gemini gratuito, o modelo escolhido pode estar sobrecarregado (503 "high
+   * demand"), lento ou sem cota — e insistir nele custava minutos: em
+   * 2026-09-30 um "Gerar CTAs" levou 9 min para falhar assim. Com reserva, o
+   * escolhido tem uma chance curta, sem novas tentativas; se não responder, o
+   * reserva (mesmo provedor, também gratuito, cota separada) atende na hora.
+   * Não é troca de provedor: nada passa a ser cobrado. As duas chamadas ficam
+   * no registro de uso, com o modelo de cada uma.
+   */
   private async send(
     operation: string,
     model: string,
@@ -250,14 +277,35 @@ export class GhostCliProvider implements AIProvider {
     allowSearch: boolean,
     temperature?: number,
   ) {
+    const profile = this.ctx.profile;
+    const request: ChatRequest = {
+      model,
+      messages,
+      temperature,
+      tools: allowSearch ? [SEARCH_TOOL] : undefined,
+      reasoningEffort: profile.reasoningEffort,
+    };
+    const fallback = profile.fallbackModels.find((m) => m !== model) ?? null;
+    if (!fallback) return this.call(operation, this.config(), request);
+
     try {
-      const response = await chatCompletion(this.config(), {
-        model,
-        messages,
-        temperature,
-        tools: allowSearch ? [SEARCH_TOOL] : undefined,
-      });
+      return await this.call(
+        operation,
+        { ...this.config(), maxRetries: 0, timeoutMs: Math.min(profile.timeoutMs, PRIMARY_TIMEOUT_MS) },
+        request,
+      );
+    } catch (err) {
+      if (!(err instanceof AiError) || !FALLBACK_ON.includes(err.code)) throw err;
+      return this.call(operation, this.config(), { ...request, model: fallback });
+    }
+  }
+
+  private async call(operation: string, config: ClientConfig, request: ChatRequest) {
+    const model = request.model;
+    try {
+      const response = await chatCompletion(config, request);
       logAiRequest({
+        provider: this.ctx.profile.provider,
         videoId: this.ctx.videoId,
         jobId: this.ctx.jobId,
         operation,
@@ -274,6 +322,7 @@ export class GhostCliProvider implements AIProvider {
     } catch (err) {
       const aiErr = err instanceof AiError ? err : new AiError("unknown", (err as Error).message);
       logAiRequest({
+        provider: this.ctx.profile.provider,
         videoId: this.ctx.videoId,
         jobId: this.ctx.jobId,
         operation,
@@ -345,12 +394,12 @@ export interface ConnectionTestResult {
  * segura — jamais a credencial.
  */
 export async function testConnection(ctx: ProviderContext): Promise<ConnectionTestResult> {
-  const model = ctx.settings.ghostcli.analysisModel;
+  const model = ctx.profile.analysisModel;
   const config: ClientConfig = {
-    baseUrl: ctx.settings.ghostcli.baseUrl,
+    baseUrl: ctx.profile.baseUrl,
     apiKey: ctx.apiKey,
-    authHeader: ctx.settings.ghostcli.authHeader,
-    timeoutMs: Math.min(ctx.settings.ghostcli.timeoutMs, 30_000),
+    authHeader: ctx.profile.authHeader,
+    timeoutMs: Math.min(ctx.profile.timeoutMs, 30_000),
     // Um teste manual nao deve ficar tentando de novo: o usuario esta esperando.
     maxRetries: 0,
   };
@@ -365,6 +414,7 @@ export async function testConnection(ctx: ProviderContext): Promise<ConnectionTe
       maxTokens: 8,
     });
     logAiRequest({
+      provider: ctx.profile.provider,
       operation: "test_connection",
       model: response.model,
       status: "ok",
@@ -382,6 +432,7 @@ export async function testConnection(ctx: ProviderContext): Promise<ConnectionTe
   } catch (err) {
     const aiErr = err instanceof AiError ? err : new AiError("unknown", (err as Error).message);
     logAiRequest({
+      provider: ctx.profile.provider,
       operation: "test_connection",
       model,
       status: "error",

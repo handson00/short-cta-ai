@@ -1,4 +1,4 @@
-import { AiError, classifyHttpStatus, friendlyMessage, parseRetryAfter } from "./errors";
+import { AiError, classifyHttpError, friendlyMessage, parseRetryAfter, parseRetryDelayFromBody } from "./errors";
 
 export interface ChatToolCall {
   id: string;
@@ -30,6 +30,12 @@ export interface ChatRequest {
   tools?: ToolDefinition[];
   jsonMode?: boolean;
   maxTokens?: number;
+  /**
+   * Quanto o modelo "pensa" antes de responder (Gemini: minimal/low/medium/
+   * high). Opcional como a temperatura: se o modelo recusar, sai na tentativa
+   * sem parâmetros opcionais.
+   */
+  reasoningEffort?: "minimal" | "low" | "medium" | "high";
 }
 
 export interface ChatResponse {
@@ -62,10 +68,11 @@ interface RawResponse {
   error?: { message?: string; type?: string; code?: string };
 }
 
-const PARAM_HINTS = ["temperature", "top_p", "response_format", "unsupported", "not supported"];
+const PARAM_HINTS = ["temperature", "top_p", "response_format", "reasoning", "unsupported", "not supported"];
 
 /**
- * Cliente da interface Chat Completions do GhostCLI.
+ * Cliente da interface Chat Completions — a do GhostCLI e a compatível do
+ * Google Gemini. Os dois falam o mesmo formato; muda endereço, chave e modelo.
  *
  * Nem todo modelo aceita os mesmos parametros de amostragem ou modo JSON
  * nativo; quando o servico recusa a requisicao por causa de um parametro,
@@ -134,6 +141,7 @@ async function singleCall(
   if (allowParams) {
     if (typeof request.temperature === "number") body.temperature = request.temperature;
     if (request.jsonMode) body.response_format = { type: "json_object" };
+    if (request.reasoningEffort) body.reasoning_effort = request.reasoningEffort;
   }
 
   const controller = new AbortController();
@@ -159,14 +167,14 @@ async function singleCall(
   const text = await res.text();
 
   if (!res.ok) {
-    const code = classifyHttpStatus(res.status);
+    const code = classifyHttpError(res.status, text);
     const detail = safeErrorDetail(text);
     throw new AiError(
       code,
       friendlyMessage(code, res.status),
       res.status,
       detail ? [detail] : [],
-      code === "rate_limited" ? parseRetryAfter(res.headers) : undefined,
+      code === "rate_limited" ? (parseRetryAfter(res.headers) ?? parseRetryDelayFromBody(text)) : undefined,
     );
   }
 
@@ -203,8 +211,10 @@ async function singleCall(
 /** Extrai a mensagem de erro do corpo sem devolver cabecalhos nem credenciais. */
 function safeErrorDetail(text: string): string | null {
   try {
-    const parsed = JSON.parse(text) as { error?: { message?: string } };
-    const message = parsed.error?.message;
+    // O Google às vezes devolve o erro dentro de uma lista: [{ "error": {...} }].
+    const raw = JSON.parse(text) as unknown;
+    const parsed = (Array.isArray(raw) ? raw[0] : raw) as { error?: { message?: string } } | undefined;
+    const message = parsed?.error?.message;
     if (typeof message === "string") return message.slice(0, 400);
   } catch {
     // corpo nao-JSON

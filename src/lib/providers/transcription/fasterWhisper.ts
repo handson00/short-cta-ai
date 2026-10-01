@@ -60,6 +60,7 @@ export class FasterWhisperProvider implements TranscriptionProvider {
         env.fasterWhisper.device,
         env.fasterWhisper.computeType,
         env.fasterWhisper.language,
+        env.fasterWhisper.beamSize,
       ],
       { timeoutMs: 900_000 },
     );

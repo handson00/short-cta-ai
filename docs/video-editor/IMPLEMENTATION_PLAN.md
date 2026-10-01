@@ -22,12 +22,14 @@ Legenda: ✅ pronto e verificado · ⚠️ parcial · ❌ não feito
 | 3 | Crop manual | ✅ 2026-09-28 |
 | 4 | Smart Crop V1 | ✅ 2026-09-28 |
 | 5 | Templates | ✅ 2026-09-28 |
-| 6 | Preview (proxy + 3 modos) | ⚠️ parcial — aba Preview feita, proxy não |
+| 6 | Preview (proxy + 3 modos) | ⚠️ parcial — aba Preview feita; proxy **adiado pelo usuário** em 2026-09-29 (o preview atual basta para os cortes curtos) |
 | 7 | Exportação MP4 | ✅ 2026-09-28 |
 | 8 | Fila de jobs + formato para Reels/TikTok | ✅ 2026-09-28 |
 | 8.1 | Revisão e alinhamento do módulo | ✅ 2026-09-29 |
-| 9 | Perfis de origem | ❌ |
-| 10 | Texto (CTA) e áudio | ✅ 2026-09-29 |
+| 9 | Perfis de origem | ⚠️ 2026-09-29 — código e testes prontos; build e tela não conferidos |
+| 11 | Efeitos (espelhar, cortar, cor, velocidade, zoom, melhorar áudio) | ⚠️ 2026-09-30 — exportação medida no FFmpeg real; tela não conferida. 98 vídeos já têm efeitos |
+| 12 | Página de Exportações (feed vertical + dados para publicar) | ⚠️ 2026-09-30 — rotas e dados testados; o gesto no navegador não foi conferido |
+| 10 | Texto (CTA) e áudio | ✅ 2026-09-29 · 10.2 "Outro CTA" (trocar pelos CTAs gerados, com o estilo) em 2026-09-30 — tela não conferida |
 
 ---
 
@@ -665,6 +667,74 @@ contra o defeito original: reintroduzido o `COALESCE` invertido, ele falha.
 
 ---
 
+## Fase 9 — Perfis de origem · ⚠️ 2026-09-29
+
+**Aceite (§104):** lote de vídeos da mesma página pode reutilizar o recorte.
+Coberto por teste com banco real; **não conferido na tela nem com build**.
+
+### O que o acervo decidiu
+
+Consulta ao banco antes de desenhar: os 98 vídeos são da mesma página
+(`@helmermovies`), em três resoluções — 720×1280, 576×1024 e 1080×1920, todas
+9:16. "Mesma página" já tinha sinal confiável no nome do arquivo; o que faltava
+era a proporção, porque um recorte normalizado só aponta para a mesma região
+em vídeos de mesma proporção.
+
+### Como funciona
+
+| Item da §104 | Implementação |
+| --- | --- |
+| Salvar crop | "Salvar como perfil" grava o recorte do editor, a página e a proporção do vídeo em que foi desenhado |
+| Carregar crop | "Carregar no editor" põe o retângulo do perfil no editor **sem gravar** (mesma regra da detecção, §22) |
+| Aplicar selecionados | "🧩 Perfil da página (N)" na barra de seleção: cada vídeo recebe o perfil da **sua** página; ou "Aplicar aos selecionados" num perfil escolhido |
+| Detectar similaridade | Um perfil serve a um vídeo quando é da mesma página e da mesma proporção (tolerância de 2%). Se o vídeo já tem detecção automática e ela diverge do perfil (IoU < 0,85), o aviso lista quem revisar |
+
+### Arquivos
+
+| Arquivo | Função |
+| --- | --- |
+| `src/lib/editor/profile.ts` | Regra pura: página, proporção, escolha do perfil, IoU — a mesma na tela e no servidor |
+| `src/lib/editor/profileApply.ts` | Aplicação em transação, com o relatório de quem ficou de fora |
+| `src/app/api/editor/profiles/route.ts` | CRUD |
+| `src/app/api/editor/profiles/apply/route.ts` | Aplicar |
+| `src/components/editor/SourceProfilePanel.tsx` | Painel do perfil no vídeo aberto |
+| `schema.ts`, `db.ts` | `source_profiles.origin_key/aspect`, `editor_video_crops.profile_id`, com migração |
+| `editorRepo.ts`, `library`, `crop`, `exportQueue.ts`, `EditorShell.tsx` | Integração |
+| `tests/editorProfile.test.ts` | 26 testes |
+
+### Decisões que não são óbvias
+
+- **Recorte manual nunca é trocado em lote.** É trabalho do usuário; o vídeo
+  fica de fora e o aviso diz por quê. "Aplicar neste vídeo" troca, porque é
+  pedido explícito.
+- **Proporção diferente fica de fora, com o motivo.** O mesmo retângulo
+  num 1:1 cortaria o filme; pular e explicar é melhor que gravar errado.
+- **Perfil vence a detecção automática** (ordem da §90), mas a divergência é
+  relatada. 0,85 veio do acervo: detecções de vídeos da mesma página se
+  sobrepõem com IoU ~0,96; um recorte manual folgado contra a detecção, ~0,87.
+- **O recorte aplicado é cópia, não vínculo.** Editar o perfil não muda os
+  vídeos que já o receberam — uma exportação conferida não pode sair diferente
+  por baixo. A tela avisa isso ao atualizar.
+- **Excluir o perfil mantém o recorte dos vídeos**, só desfaz o vínculo — e
+  explicitamente, porque `profile_id` entrou por ALTER TABLE, sem FK.
+- **A rota de recorte não aceita mais `source: "profile"`** vindo do navegador:
+  um recorte só vira "do perfil" pela rota que confere página e proporção.
+- **Sem página identificada no nome do arquivo, nenhum perfil é sugerido.**
+  Adivinhar a página agruparia vídeos de molduras diferentes.
+
+### Verificação
+
+| O quê | Resultado |
+| --- | --- |
+| `npm run typecheck` | ✅ |
+| `npm test` | ✅ 345/345 (26 desta fase) |
+| Migração numa **cópia** do banco real (backup do SQLite) | ✅ colunas criadas, 5 recortes preservados, `foreign_key_check` limpo |
+| Página reconhecida nos 98 vídeos | ✅ `tiktok:helmermovies` |
+| `npm run build` | ❌ **não rodado** — o servidor do usuário estava de pé na porta 3000 |
+| Rotas com o app rodando, painel, botões | ❌ **não verificados** |
+
+---
+
 ## Fase 10 — Texto (CTA) e áudio · ✅ 2026-09-29
 
 **Aceite (§105):** texto, CTA, áudio, música, volume e mixagem. ✅
@@ -778,5 +848,4 @@ ali mesmo, e toda alteração já ficar salva e aparecer no preview na hora.
 | --- | --- | --- |
 | `/api/editor/import` sem interface desde a Fase 5.1 | `src/app/api/editor/import/route.ts` | Baixo — mantida de propósito; o pedido foi "por enquanto" |
 | Import manual carrega o vídeo inteiro em RAM | `src/app/api/editor/import/route.ts` | Médio — corrigir antes de religar a interface |
-| `source_profiles` e seu CRUD sem uso | `schema.ts`, `editorRepo.ts` | Baixo — base da Fase 9 |
 | Sem teste de interface | — | Médio — geometria, fila e formato têm teste; arrastar, clicar e tocar vídeo só foram conferidos pelo usuário |

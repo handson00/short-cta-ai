@@ -7,6 +7,10 @@ import { run, binaryAvailable, CommandError } from "../../media/run";
 import { frameSize } from "../../media/ffmpeg";
 import { classifyDetectedText, type OcrLine } from "../../pipeline/ctaDetection";
 import type { FrameRef, VisionProvider, VisualAnalysis } from "../../types";
+import { mapLimit } from "../../concurrency";
+
+/** Tesseracts simultâneos por vídeo. Roda junto com a transcrição: não passar disso. */
+const OCR_PARALLELISM = 3;
 
 /**
  * VisionProvider baseado em OCR.
@@ -43,11 +47,15 @@ export class TesseractVisionProvider implements VisionProvider {
       };
     }
 
+    // Cada frame é independente: lê em paralelo e junta na ordem original, para
+    // a classificação receber exatamente o que recebia lendo um por um.
+    const perFrame = await mapLimit(frames, OCR_PARALLELISM, async (frame) => {
+      const size = (await frameSize(frame.path)) ?? { width: 1080, height: 1920 };
+      return this.ocrFrame(frame, size);
+    });
     const lines: OcrLine[] = [];
     const falhas = new Set<string>();
-    for (const frame of frames) {
-      const size = (await frameSize(frame.path)) ?? { width: 1080, height: 1920 };
-      const { lines: collected, error } = await this.ocrFrame(frame, size);
+    for (const { lines: collected, error } of perFrame) {
       if (error) falhas.add(error);
       lines.push(...collected);
     }

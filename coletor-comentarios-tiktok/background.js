@@ -106,6 +106,8 @@ async function executarCapturaEmLote(videos, config) {
           postUrl: video.originalUrl,
           comments: fatia,
           hashtags: i === 0 ? hashtags : { doVideo: [], nosComentarios: [], todas: [] },
+          // Do segundo pedaço em diante soma aos já gravados em vez de substituir.
+          append: i > 0,
         };
 
         const resIngest = await fetch(baseUrl, {
@@ -244,6 +246,8 @@ async function pollCaptureQueue() {
             postUrl: item.url,
             comments: fatia,
             hashtags: i === 0 ? hashtags : { doVideo: [], nosComentarios: [], todas: [] },
+            // Do segundo pedaço em diante soma aos já gravados em vez de substituir.
+            append: i > 0,
           };
           const resIngest = await fetch(`${apiBase}/api/comments/ingest`, {
             method: 'POST',

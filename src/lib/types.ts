@@ -72,8 +72,32 @@ export interface VisualAnalysis {
 
 // ======================== ANÁLISE DE CENA ========================
 
+/**
+ * Em que o enredo se apoiou. Calculado pelo servidor a partir da transcrição
+ * que a análise recebeu — nunca declarado pelo modelo, que poderia dizer
+ * "ouvi a fala" sem ter recebido fala nenhuma.
+ */
+export type EvidenceBasis = "dialogue" | "visual_only";
+
+/** Uma fala da transcrição que sustenta o enredo. */
+export interface KeyLine {
+  atSeconds: number | null;
+  /** Trecho literal da transcrição — conferido no servidor (`groundKeyLines`). */
+  text: string;
+  /** O que essa fala revela da história. */
+  why: string | null;
+}
+
 export interface SceneAnalysis {
   sceneSummary: string;
+  /**
+   * O enredo reconstruído a partir da FALA: quem, o que quer, o que impede, o
+   * que muda. Nulo quando não houve fala — o resumo sozinho descreve a cena,
+   * não a história.
+   */
+  plot: string | null;
+  keyLines: KeyLine[];
+  evidenceBasis?: EvidenceBasis;
   analysisLimitations: string[];
   conflict: string | null;
   curiosity: string | null;
@@ -158,11 +182,21 @@ export const JOB_STATUSES = [
   "analyzing_scene",
   "identifying_work",
   "generating_ctas",
+  /** Parte local pronta (transcrição, OCR); os CTAs esperam o usuário pedir. */
+  "awaiting_ai",
   "done",
   "error",
   "canceled",
 ] as const;
 export type JobStatus = (typeof JOB_STATUSES)[number];
+
+/**
+ * O que um job de análise executa.
+ * - `full`: parte local + IA (análise e CTAs) — "Analisar novamente".
+ * - `local`: só transcrição, frames e OCR, sem chamada paga — a importação.
+ * - `ai`: só a IA, sobre a parte local já feita — "Gerar CTAs".
+ */
+export type JobMode = "full" | "local" | "ai";
 
 export const ACTIVE_STATUSES: JobStatus[] = [
   "extracting_media",
@@ -181,6 +215,7 @@ export const STATUS_LABEL: Record<JobStatus, string> = {
   analyzing_scene: "Analisando cena",
   identifying_work: "Identificando obra",
   generating_ctas: "Gerando CTAs",
+  awaiting_ai: "Aguardando CTA",
   done: "Concluído",
   error: "Erro",
   canceled: "Cancelado",
@@ -206,7 +241,11 @@ export interface ExistingCtaDetection {
 
 export interface AIProvider {
   analyzeScene(input: SceneContext): Promise<SceneAnalysis>;
-  generateCtas(input: SceneAnalysis, options: CtaOptions): Promise<CtaResult>;
+  /**
+   * A transcrição vai junto com a análise: o CTA é escrito lendo as falas, não
+   * só o resumo que o modelo fez delas.
+   */
+  generateCtas(input: SceneAnalysis, options: CtaOptions, transcript?: Transcript | null): Promise<CtaResult>;
   /** Ganchos apoiados na reacao do publico, nao na descricao da cena. */
   generateCtasFromComments(
     insights: import("./pipeline/commentInsights").CommentInsights,
@@ -218,19 +257,35 @@ export interface AIProvider {
     analysis: SceneAnalysis | null,
     count: number,
   ): Promise<import("./pipeline/validation").OptimizedCommentCtaResult>;
+  /** Hashtags novas para o vídeo, sem repetir as que ele já tem. */
+  generateHashtags(
+    context: {
+      cta: string | null;
+      plot: string | null;
+      sceneSummary: string | null;
+      transcript: string | null;
+      workTitle: string | null;
+    },
+    existing: string[],
+    count: number,
+  ): Promise<import("./pipeline/validation").AiHashtag[]>;
+  /** Legenda em japonês aberta pela hashtag fixa (página de Exportações). */
+  generateJapaneseCaption(
+    context: {
+      cta: string | null;
+      plot: string | null;
+      sceneSummary: string | null;
+      transcript: string | null;
+      workTitle: string | null;
+    },
+    hashtag: string,
+  ): Promise<string>;
   /** Legenda e hashtags, segundo o que hoje distribui um Reels. */
   generatePublishKit(
     insights: import("./pipeline/commentInsights").CommentInsights | null,
     analysis: SceneAnalysis | null,
     existingCta: string | null,
   ): Promise<import("./pipeline/validation").PublishKitResult>;
-  /** Hashtags com alto potencial viral baseadas em comentários e hashtags capturadas. */
-  generateViralHashtags(
-    insights: import("./pipeline/commentInsights").CommentInsights | null,
-    analysis: SceneAnalysis | null,
-    capturedHashtags: { doVideo: string[]; nosComentarios: Array<{ tag: string; vezes: number }>; todas: string[] },
-    count: number,
-  ): Promise<{ hashtags: string[]; reasoning: string | null }>;
 }
 
 export interface TranscriptionProvider {
@@ -273,6 +328,8 @@ export interface EditorCrop {
   normalized: boolean;
   confidence?: number;
   source: "auto" | "profile" | "manual";
+  /** Perfil de onde o recorte foi copiado, quando `source` é "profile". */
+  profileId?: string | null;
 }
 
 export interface EditorTemplate {
@@ -361,6 +418,10 @@ export interface SourceProfile {
   cropY: number;
   cropW: number;
   cropH: number;
+  /** Página de origem (`tiktok:usuario`); nula = perfil avulso, sem página. */
+  originKey: string | null;
+  /** Largura ÷ altura do vídeo em que o recorte foi desenhado. */
+  aspect: number | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -411,6 +472,11 @@ export interface EditorExportSettings {
    * fotografada ao enfileirar como o recorte. Nula = vídeo sai sem texto.
    */
   textLayer?: string | null;
+  /**
+   * Efeitos do vídeo (aba Efeitos), fotografados ao enfileirar como o recorte:
+   * mudar os efeitos depois de mandar exportar não muda o job da fila.
+   */
+  effects?: import("./editor/effects").EditorEffects | null;
 }
 
 export interface EditorSystemStatus {

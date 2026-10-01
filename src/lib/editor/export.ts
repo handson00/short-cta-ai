@@ -8,6 +8,8 @@ import { buildFilterGraph } from "./filterGraph";
 import { consumeProgress, newProgressState, type ProgressSnapshot } from "./progress";
 import { containerArgs, videoEncoderArgs } from "./exportPreset";
 import { probe } from "../media/ffmpeg";
+import { DEFAULT_EFFECTS, effectsError, normalizeEffects, outputDuration, sourceWindow, type EditorEffects } from "./effects";
+import { outputDir } from "./outputDir";
 
 /**
  * Renderiza um video com o recorte e o template aplicados (spec §102).
@@ -34,6 +36,8 @@ export interface ExportRequest {
   template: EditorTemplateConfig;
   /** Camada de texto já renderizada (arquivo em `textLayersDir`), ou nula. */
   textLayer?: string | null;
+  /** Efeitos do vídeo (aba Efeitos), fotografados no job. */
+  effects?: EditorEffects | null;
   fps?: number;
   encoder?: string;
 }
@@ -102,6 +106,12 @@ export async function renderVideo(
 
   const t = req.template;
   const fps = req.fps ?? 30;
+  const fx = req.effects ? normalizeEffects(req.effects) : DEFAULT_EFFECTS;
+  // Corte que não deixa vídeo vira erro claro antes do FFmpeg, não um MP4 vazio.
+  const fxError = effectsError(req.durationSeconds, fx);
+  if (fxError) throw new ExportError(fxError);
+  // O progresso é medido no tempo do arquivo que sai (cortado e acelerado).
+  const finalDuration = outputDuration(req.durationSeconds, fx) || req.durationSeconds;
   const textLayerPath = req.textLayer ? path.join(env.textLayersDir, path.basename(req.textLayer)) : null;
 
   // A matriz de cor não fica no banco: é lida da origem agora, porque a
@@ -126,6 +136,7 @@ export async function renderVideo(
     hasOverlayImage: Boolean(t.overlay),
     hasLogoImage: Boolean(t.logo),
     hasTextLayer: Boolean(textLayerPath),
+    effects: fx,
   });
 
   const asset = (name: string) => path.join(env.templatesDir, path.basename(name));
@@ -148,11 +159,21 @@ export async function renderVideo(
     }
   }
 
-  fs.mkdirSync(env.outputDir, { recursive: true });
-  const outputPath = reserveOutputPath(env.outputDir, req.originalName);
+  const dir = outputDir();
+  fs.mkdirSync(dir, { recursive: true });
+  const outputPath = reserveOutputPath(dir, req.originalName);
   const partial = `${outputPath}.processing`;
 
-  const args: string[] = ["-y", "-v", "error", "-progress", "pipe:1", "-i", req.sourcePath];
+  // Corte de início/fim na ENTRADA: o grafo recebe só o trecho escolhido, com
+  // o tempo começando em zero — texto, fades e música ficam alinhados sem
+  // nenhuma conta a mais. Vídeo e áudio de origem são cortados juntos.
+  const trimArgs: string[] = [];
+  if (req.durationSeconds > 0 && (fx.trimStart > 0 || fx.trimEnd > 0)) {
+    const { start, length } = sourceWindow(req.durationSeconds, fx);
+    if (start > 0) trimArgs.push("-ss", start.toFixed(3));
+    trimArgs.push("-t", length.toFixed(3));
+  }
+  const args: string[] = ["-y", "-v", "error", "-progress", "pipe:1", ...trimArgs, "-i", req.sourcePath];
 
   // A ordem dos -i é a de graph.inputs; a entrada 1 é sempre o fundo. Imagens
   // entram em loop e a música em loop contínuo: o vídeo é a única fonte finita
@@ -194,7 +215,7 @@ export async function renderVideo(
     });
 
     child.stdout.on("data", (c: Buffer) => {
-      const snap = consumeProgress(state, c.toString("utf8"), req.durationSeconds);
+      const snap = consumeProgress(state, c.toString("utf8"), finalDuration);
       onProgress?.(snap);
     });
 

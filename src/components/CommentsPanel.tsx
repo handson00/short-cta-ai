@@ -11,6 +11,13 @@ interface VideoHashtags {
   todas: string[];
 }
 
+/** Declarado aqui: componente cliente não importa de módulo de servidor (HANDOFF §11). */
+interface RecommendedHashtag {
+  tag: string;
+  score: number;
+  reasons: string[];
+}
+
 interface CommentsPanelProps {
   postUrl?: string | null;
   compact?: boolean;
@@ -41,9 +48,7 @@ export default function CommentsPanel({ videoId, comments: propComments, capture
   const [fetchedComments, setFetchedComments] = useState<PostComment[] | null | undefined>(undefined);
   const [fetchedCapturedAt, setFetchedCapturedAt] = useState<string | null>(null);
   const [hashtags, setHashtags] = useState<VideoHashtags | null>(null);
-  const [gerandoHashtags, setGerandoHashtags] = useState(false);
-  const [hashtagsGeradas, setHashtagsGeradas] = useState<string[] | null>(null);
-  const [erroHashtags, setErroHashtags] = useState<string | null>(null);
+  const [recomendadas, setRecomendadas] = useState<RecommendedHashtag[]>([]);
 
   const loadComments = useCallback(async () => {
     if (propComments !== undefined) return;
@@ -54,6 +59,7 @@ export default function CommentsPanel({ videoId, comments: propComments, capture
         setFetchedComments(data.comments ?? []);
         setFetchedCapturedAt(data.capturedAt ?? null);
         setHashtags(data.hashtags ?? null);
+        setRecomendadas(data.recommendedHashtags ?? []);
       } else {
         setFetchedComments(null);
       }
@@ -126,28 +132,6 @@ export default function CommentsPanel({ videoId, comments: propComments, capture
       setGerando(false);
       void loadComments();
       onCommentsCaptured?.();
-    }
-  }
-
-  async function gerarHashtagsVirais() {
-    setGerandoHashtags(true);
-    setErroHashtags(null);
-    setHashtagsGeradas(null);
-    try {
-      const res = await fetch(`/api/videos/${videoId}/hashtags-virais`, {
-        method: "POST",
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error((err as { error?: string }).error || "Erro ao gerar hashtags");
-      }
-      const data = (await res.json()) as { hashtags: string[] };
-      setHashtagsGeradas(data.hashtags ?? []);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Erro desconhecido";
-      setErroHashtags(msg);
-    } finally {
-      setGerandoHashtags(false);
     }
   }
 
@@ -335,30 +319,33 @@ export default function CommentsPanel({ videoId, comments: propComments, capture
                 </div>
               )}
 
-              <button
-                type="button"
-                className="btn-quiet mt-1 px-2 py-1 text-[11px]"
-                disabled={gerandoHashtags || gerando || otimizando}
-                onClick={() => void gerarHashtagsVirais()}
-              >
-                {gerandoHashtags ? "Gerando hashtags virais…" : "Gerar hashtags com alto potencial viral"}
-              </button>
-
-              {erroHashtags && <p className="hint text-amber-400 text-[11px]">{erroHashtags}</p>}
-
-              {hashtagsGeradas && hashtagsGeradas.length > 0 && (
-                <div className="mt-2 space-y-1 rounded border border-accent/30 bg-accent/5 p-2">
-                  <p className="text-[11px] font-semibold text-accent">Hashtags virais sugeridas pela IA</p>
-                  <div className="flex flex-wrap gap-1">
-                    {hashtagsGeradas.map((tag) => (
-                      <span key={tag} className="rounded bg-accent/15 px-1.5 py-0.5 text-[10px] font-medium text-accent">
-                        #{tag.replace(/^#/, "")}
-                      </span>
-                    ))}
-                  </div>
-                  <CopyButton text={hashtagsGeradas.map((t) => t.startsWith("#") ? t : `#${t}`).join(" ")} compact />
-                </div>
-              )}
+              {/* As 2 recomendadas, escolhidas SEM IA entre as capturadas. */}
+              <div className="mt-2 space-y-1 rounded border border-accent/30 bg-accent/5 p-2">
+                <p className="text-[11px] font-semibold text-accent">Hashtags recomendadas</p>
+                {recomendadas.length > 0 ? (
+                  <>
+                    <ul className="space-y-1">
+                      {recomendadas.map((h) => (
+                        <li key={h.tag} className="text-[10px]">
+                          <span className="rounded bg-accent/15 px-1.5 py-0.5 font-medium text-accent">{h.tag}</span>
+                          <span className="ml-1 text-ink-400">{h.reasons.join(" · ")}</span>
+                        </li>
+                      ))}
+                    </ul>
+                    <CopyButton text={recomendadas.map((h) => h.tag).join(" ")} compact />
+                  </>
+                ) : (
+                  <p className="text-[10px] text-ink-400">
+                    Nenhuma hashtag específica entre as capturadas — só as genéricas (#fyp, #viral…), que não
+                    classificam o vídeo.
+                  </p>
+                )}
+                <p className="text-[9px] text-ink-500">
+                  Critério: estar no post original (o vídeo que teve as visualizações), quantas vezes o público usou
+                  nos comentários e se fala do mesmo que o CTA e a fala. A extensão não mede visualização por
+                  hashtag — o TikTok não informa.
+                </p>
+              </div>
             </div>
           )}
 

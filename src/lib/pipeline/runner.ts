@@ -1,13 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
 import { env } from "../env";
-import { getSettings } from "../settings";
+import { AI_PROVIDER_LABEL, getSettings, resolveAiProfile } from "../settings";
 import { AiError, aiConfigured, aiProvider } from "../providers/ai";
 import { detailedMessage } from "../providers/ai/errors";
 import { transcriptionProvider } from "../providers/transcription";
 import { visionProvider } from "../providers/vision";
 import { extractAudio, extractFrames, extractThumbnail, probe } from "../media/ffmpeg";
 import { PROMPT_VERSION } from "../prompts";
+import { analysisInputHash, generationInputHash } from "./aiCache";
+import { transcriptFailure } from "./speechBasis";
+import { logAiRequest } from "../aiLog";
+import { searchProvider } from "../providers/search";
 import * as repo from "../repo";
 import { heartbeat, setStage, releaseJob, type ClaimedJob } from "./jobControl";
 import type { CtaOptions, CtaStyle, SceneContext, WorkIdentification } from "../types";
@@ -34,6 +38,35 @@ function ensureNotCancelled(jobId: string): void {
   if (repo.isCancelRequested(jobId)) throw new Cancelled();
 }
 
+/**
+ * A parte local já rodou e serve: há transcrição, leitura do texto na tela e
+ * frames. Transcrição que FALHOU não serve — gerar CTAs sobre ela seria pagar
+ * pela IA para escrever sem ouvir a fala, exatamente o que se quer evitar.
+ */
+function hasLocalEvidence(videoId: string): boolean {
+  const transcript = repo.getTranscript(videoId);
+  return (
+    transcript !== null &&
+    transcriptFailure(transcript) === null &&
+    repo.getVisualAnalysis(videoId) !== null &&
+    repo.listFrames(videoId).length > 0
+  );
+}
+
+/** Registra a chamada que NÃO foi feita: a economia aparece em "Uso da IA". */
+function logCacheHit(operation: string, videoId: string, jobId: string, model: string): void {
+  logAiRequest({
+    provider: getSettings().ai.provider,
+    videoId,
+    jobId,
+    operation,
+    model,
+    status: "cache",
+    durationMs: 0,
+    promptVersion: PROMPT_VERSION,
+  });
+}
+
 export async function runJob(job: ClaimedJob): Promise<void> {
   const settings = getSettings();
   const video = repo.getVideo(job.videoId);
@@ -51,16 +84,25 @@ export async function runJob(job: ClaimedJob): Promise<void> {
   try {
     ensureNotCancelled(job.id);
 
-    if (!job.reuseScene) {
+    // A parte local (mídia, fala, texto na tela) não custa chamada paga. Um job
+    // "ai" a pula quando ela já existe; sem ela (vídeo nunca processado), faz
+    // antes — a IA não pode trabalhar sobre evidência que não foi extraída.
+    const needsLocal = !job.reuseScene && (job.mode !== "ai" || !hasLocalEvidence(video.id));
+    if (needsLocal) {
       await stageExtractMedia(job, video, settings.limits);
       ensureNotCancelled(job.id);
 
-      await stageTranscribe(job, video);
+      await transcribeAndReadText(job, video);
       ensureNotCancelled(job.id);
+    }
 
-      await stageReadText(job, video);
-      ensureNotCancelled(job.id);
+    // Importação: para aqui. Os CTAs esperam o usuário escolher os vídeos.
+    if (job.mode === "local") {
+      repo.setJobStatus(job.id, "awaiting_ai");
+      return;
+    }
 
+    if (!job.reuseScene) {
       await stageAnalyzeScene(job, video);
       ensureNotCancelled(job.id);
 
@@ -160,11 +202,31 @@ async function stageExtractMedia(
   }
 }
 
-// ----------------------------- 2. Transcricao -------------------------------
+// ------------------------- 2 e 3. Fala e texto na tela ----------------------
 
-async function stageTranscribe(job: ClaimedJob, video: repo.VideoRecord): Promise<void> {
+/**
+ * A transcrição lê o áudio; o OCR lê os frames. Nenhum depende do outro, então
+ * rodam juntos e o OCR some dentro do tempo da transcrição. A etapa mostrada é
+ * a que ainda falta: "Transcrevendo" enquanto a fala não sai, "Lendo texto"
+ * só se o OCR passar da transcrição.
+ */
+async function transcribeAndReadText(job: ClaimedJob, video: repo.VideoRecord): Promise<void> {
   setStage(job.id, "transcribing");
+  let readingDone = false;
+  const reading = stageReadText(video).finally(() => {
+    readingDone = true;
+  });
+  const transcribing = stageTranscribe(video).then(() => {
+    if (!readingDone) setStage(job.id, "reading_text");
+  });
+  // Espera os dois mesmo se um falhar: nenhuma escrita pode sobrar rodando
+  // depois que o job já foi dado como encerrado.
+  for (const r of await Promise.allSettled([transcribing, reading])) {
+    if (r.status === "rejected") throw r.reason;
+  }
+}
 
+async function stageTranscribe(video: repo.VideoRecord): Promise<void> {
   const audioPath = path.join(env.artifactsDir, video.id, "audio.wav");
   const provider = transcriptionProvider();
 
@@ -198,11 +260,7 @@ async function stageTranscribe(job: ClaimedJob, video: repo.VideoRecord): Promis
   }
 }
 
-// ------------------------------ 3. OCR / texto ------------------------------
-
-async function stageReadText(job: ClaimedJob, video: repo.VideoRecord): Promise<void> {
-  setStage(job.id, "reading_text");
-
+async function stageReadText(video: repo.VideoRecord): Promise<void> {
   const frames = repo.listFrames(video.id);
   const provider = visionProvider();
 
@@ -256,6 +314,16 @@ async function stageAnalyzeScene(job: ClaimedJob, video: repo.VideoRecord): Prom
 
   const settings = getSettings();
   const context = buildSceneContext(video);
+  const model = resolveAiProfile(settings).analysisModel;
+
+  // Mesmo texto para o mesmo modelo = mesma pergunta. A análise salva vale.
+  const allowSearch = settings.toggles.identifyWork && settings.toggles.externalSearch && searchProvider().available;
+  const inputHash = analysisInputHash(context, model, allowSearch);
+  if (repo.latestSceneAnalysis(video.id)?.inputHash === inputHash) {
+    logCacheHit("analyze_scene", video.id, job.id, model);
+    return;
+  }
+
   const provider = aiProvider({ videoId: video.id, jobId: job.id });
   const analysis = await provider.analyzeScene(context);
 
@@ -265,7 +333,8 @@ async function stageAnalyzeScene(job: ClaimedJob, video: repo.VideoRecord): Prom
 
   repo.saveSceneAnalysis(video.id, analysis, {
     promptVersion: PROMPT_VERSION,
-    model: settings.ghostcli.analysisModel,
+    model,
+    inputHash,
   });
 }
 
@@ -311,8 +380,23 @@ async function stageGenerateCtas(job: ClaimedJob, video: repo.VideoRecord): Prom
     styleExamples: repo.listStyleExamples().map((e: any) => e.text),
   };
 
+  // A transcrição vai direto para a geração: quem escreve o gancho lê as falas,
+  // não só o resumo que a análise fez delas. Vale também para "Regenerar CTAs",
+  // que reaproveita uma análise antiga mas lê a transcrição atual.
+  const transcript = repo.getTranscript(video.id);
+  const model = resolveAiProfile(settings).generationModel;
+  const inputHash = generationInputHash(stored, options, transcript, model);
+
+  // Mesmas entradas = mesmos CTAs: reaproveita e, de quebra, mantém o CTA que
+  // o usuário escolheu na Fila (gerar de novo apagaria a escolha). "Regenerar
+  // CTAs" (reuseScene) é pedido explícito de sugestões novas e sempre chama.
+  if (!job.reuseScene && stored.ctasInputHash === inputHash && repo.listSuggestions(video.id).length > 0) {
+    logCacheHit("generate_ctas", video.id, job.id, model);
+    return;
+  }
+
   const provider = aiProvider({ videoId: video.id, jobId: job.id });
-  const result = await provider.generateCtas(stored, options);
+  const result = await provider.generateCtas(stored, options, transcript);
 
   const items: {
     text: string;
@@ -347,10 +431,12 @@ async function stageGenerateCtas(job: ClaimedJob, video: repo.VideoRecord): Prom
 
   repo.replaceSuggestions(video.id, stored.id, items);
   repo.updateSceneRecommendation(stored.id, result.recommendedCta);
+  repo.setCtasInputHash(stored.id, inputHash);
 }
 
 function requireAi(): void {
   if (!aiConfigured()) {
-    throw new AiError("not_configured", "Configure a credencial do GhostCLI antes de processar vídeos.");
+    const label = AI_PROVIDER_LABEL[getSettings().ai.provider];
+    throw new AiError("not_configured", `Configure a chave do ${label} em Configurações antes de gerar CTAs.`);
   }
 }

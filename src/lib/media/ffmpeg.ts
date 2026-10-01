@@ -4,6 +4,10 @@ import { env } from "../env";
 import { run, binaryAvailable, CommandError } from "./run";
 import { anchorTimestamps, averageHashFromGray, isNearDuplicate, selectFrameTimestamps } from "./frames";
 import type { FrameRef } from "../types";
+import { mapLimit } from "../concurrency";
+
+/** ffmpegs simultâneos por vídeo; a fila já roda mais de um vídeo por vez. */
+const FRAME_PARALLELISM = 4;
 
 export interface MediaProbe {
   durationSeconds: number;
@@ -148,22 +152,30 @@ export async function extractFrames(
   // exatamente os frames que provam que o CTA fica o video inteiro.
   const anchors = new Set(anchorTimestamps(durationSeconds));
 
-  const frames: ExtractedFrame[] = [];
-  const hashes: string[] = [];
-  let skipped = 0;
-
-  for (const ts of timestamps) {
+  // Extrair e calcular o hash não depende de nenhum outro frame: roda em
+  // paralelo. O descarte por semelhança, esse sim, depende da ordem (compara
+  // com os que já ficaram) e continua sequencial — o resultado é o mesmo de
+  // antes, só que sem esperar um ffmpeg terminar para abrir o próximo.
+  const extracted = await mapLimit(timestamps, FRAME_PARALLELISM, async (ts) => {
     const framePath = path.join(outputDir, `frame_${ts.toFixed(2).replace(".", "_")}.png`);
     try {
       await run(env.ffmpegPath, ["-y", "-ss", String(ts), "-i", videoPath, "-frames:v", "1", framePath], {
         timeoutMs: 60_000,
       });
     } catch {
-      continue;
+      return null;
     }
-    if (!fs.existsSync(framePath)) continue;
+    if (!fs.existsSync(framePath)) return null;
+    return { ts, framePath, phash: await averageHash(framePath) };
+  });
 
-    const phash = await averageHash(framePath);
+  const frames: ExtractedFrame[] = [];
+  const hashes: string[] = [];
+  let skipped = 0;
+
+  for (const item of extracted) {
+    if (!item) continue;
+    const { ts, framePath, phash } = item;
     if (phash && !anchors.has(ts) && isNearDuplicate(phash, hashes)) {
       fs.rmSync(framePath, { force: true });
       skipped += 1;

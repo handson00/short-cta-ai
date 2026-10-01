@@ -5,6 +5,7 @@ import { transcriptionStatus } from "@/lib/providers/transcription";
 import { visionStatus } from "@/lib/providers/vision";
 import { searchStatus } from "@/lib/providers/search";
 import { ffmpegAvailable } from "@/lib/media/ffmpeg";
+import { outputDir } from "@/lib/editor/outputDir";
 import { activeJobCount, workerRunning } from "@/lib/queue";
 import { queueOverview } from "@/lib/view";
 import { db } from "@/lib/db";
@@ -13,6 +14,7 @@ import { MODEL_NOTE, MODEL_SUGGESTIONS } from "@/lib/models";
 export const dynamic = "force-dynamic";
 
 interface UsageRow {
+  provider: string | null;
   operation: string;
   model: string | null;
   status: string;
@@ -34,15 +36,15 @@ export async function GET() {
 
   const usage = db()
     .prepare(
-      `SELECT operation, model, status, COUNT(*) AS total, AVG(duration_ms) AS avg_ms,
+      `SELECT provider, operation, model, status, COUNT(*) AS total, AVG(duration_ms) AS avg_ms,
               SUM(prompt_tokens) AS prompt_tokens, SUM(completion_tokens) AS completion_tokens
-       FROM ai_request_logs GROUP BY operation, model, status ORDER BY total DESC LIMIT 50`,
+       FROM ai_request_logs GROUP BY provider, operation, model, status ORDER BY total DESC LIMIT 50`,
     )
     .all() as UsageRow[];
 
   const recentErrors = db()
     .prepare(
-      `SELECT operation, model, error_code, error_message, created_at FROM ai_request_logs
+      `SELECT provider, operation, model, error_code, error_message, created_at FROM ai_request_logs
        WHERE status = 'error' ORDER BY created_at DESC LIMIT 20`,
     )
     .all();
@@ -50,6 +52,9 @@ export async function GET() {
   return json({
     warnings: configWarnings(),
     credential: credentialStatus(),
+    /** A pasta que de fato recebe os MP4 exportados, já resolvida. */
+    outputDirInUse: outputDir(),
+    credentials: { ghostcli: credentialStatus("ghostcli"), gemini: credentialStatus("gemini") },
     settings: getSettings(),
     models: { suggestions: MODEL_SUGGESTIONS, note: MODEL_NOTE },
     providers: {

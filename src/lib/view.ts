@@ -2,6 +2,7 @@ import * as repo from "./repo";
 import { queueCounts } from "./queue";
 import { STATUS_LABEL, type CtaStyle, type JobStatus } from "./types";
 import { buildEmbedUrl } from "./source";
+import { ctaBasisOf } from "./pipeline/speechBasis";
 import type { QueueOverview, VideoDetail, VideoSummary } from "./viewTypes";
 
 export type { QueueOverview, VideoDetail, VideoSummary, SuggestionView, SelectionView } from "./viewTypes";
@@ -30,6 +31,9 @@ export function videoSummary(video: repo.VideoRecord, job: repo.JobRecord | unde
     attempts: job?.attempts ?? 0,
     maxAttempts: job?.maxAttempts ?? 3,
     sceneSummary: analysis?.sceneSummary ?? null,
+    plot: analysis?.plot ?? null,
+    keyLines: analysis?.keyLines ?? [],
+    ctaBasis: ctaBasisOf(analysis, repo.getTranscript(video.id)),
     recommendedCta: analysis?.recommended ?? null,
     existingCta: existing
       ? {

@@ -17,6 +17,9 @@ import {
 } from "@/lib/editor/template";
 import CropOverlay from "./CropOverlay";
 import CompositionPreview from "./CompositionPreview";
+import CtaPicker from "./CtaPicker";
+import type { CtaOption } from "@/lib/editor/ctaOptions";
+import type { EditorEffects } from "@/lib/editor/effects";
 
 type EditTarget = "video" | "logo" | "text";
 export type SaveState = "saved" | "pending" | "saving" | "error";
@@ -79,10 +82,12 @@ export default function TemplatePanel({
   previewText,
   previewLiveText,
   previewPlaceholder,
+  previewCtaOptions,
   onPreviewTextChange,
   onDraftChange,
   onSaveStateChange,
   assignCount,
+  previewEffects,
 }: {
   templates: EditorTemplate[];
   selectedId: string | null;
@@ -101,12 +106,16 @@ export default function TemplatePanel({
   previewLiveText: string;
   /** O CTA da análise, mostrado quando o campo está vazio. */
   previewPlaceholder: string;
+  /** CTAs gerados para o vídeo aberto: o botão "Outro CTA" percorre esta lista. */
+  previewCtaOptions: CtaOption[];
   onPreviewTextChange: (text: string) => void;
   /** O rascunho a cada alteração, para a aba Preview mostrar em tempo real. */
   onDraftChange: (templateId: string | null, config: EditorTemplateConfig) => void;
   /** Se há salvamento pendente: a exportação espera ele terminar. */
   onSaveStateChange: (state: SaveState) => void;
   assignCount: number;
+  /** Efeitos do vídeo em preview: a miniatura mostra zoom, espelho e cor. */
+  previewEffects?: EditorEffects | null;
 }) {
   const selected = templates.find((t) => t.id === selectedId) ?? null;
   const [draft, setDraft] = useState<EditorTemplateConfig>(selected?.config ?? DEFAULT_TEMPLATE);
@@ -388,6 +397,7 @@ export default function TemplatePanel({
           displayHeight={PREVIEW_HEIGHT}
           text={textOn ? sampleText : null}
           onTextLayout={setTextLayout}
+          effects={previewEffects}
         >
           {/* Sem máscara: escurecer o template inteiro em volta do slot (ou da
               logo) esconderia justamente a composição que se está montando. */}
@@ -520,6 +530,9 @@ export default function TemplatePanel({
                     placeholder={previewPlaceholder || "Escreva o texto que aparece sobre este vídeo"}
                     className="mt-1 w-full resize-none rounded-md border border-ink-700 bg-ink-950/60 px-2 py-1.5 text-xs text-ink-200 focus:border-accent focus:outline-none"
                   />
+                  <span className="mb-1 block">
+                    <CtaPicker options={previewCtaOptions} text={previewLiveText} onPick={onPreviewTextChange} />
+                  </span>
                   <span className="block text-[10px] text-ink-500">
                     Salvo sozinho, só neste vídeo. Vazio = usa o CTA da análise. O estilo abaixo
                     vale para todos os vídeos do template.

@@ -42,6 +42,8 @@ CREATE TABLE IF NOT EXISTS analysis_jobs (
   retryable INTEGER NOT NULL DEFAULT 1,
   cancel_requested INTEGER NOT NULL DEFAULT 0,
   reuse_scene INTEGER NOT NULL DEFAULT 0,
+  -- full = local + IA; local = só transcrição/OCR (importação); ai = só a IA.
+  mode TEXT NOT NULL DEFAULT 'full',
   lease_owner TEXT,
   lease_expires_at TEXT,
   created_at TEXT NOT NULL,
@@ -126,6 +128,10 @@ CREATE TABLE IF NOT EXISTS scene_analyses (
   raw_json TEXT NOT NULL DEFAULT '{}',
   prompt_version TEXT NOT NULL,
   model TEXT,
+  -- Impressão digital exata do que foi enviado à IA na análise e na geração.
+  -- Igual na próxima vez = o resultado salvo é reaproveitado, sem chamada paga.
+  input_hash TEXT,
+  ctas_input_hash TEXT,
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_scene_video ON scene_analyses(video_id, created_at DESC);
@@ -155,6 +161,8 @@ CREATE TABLE IF NOT EXISTS user_selections (
 
 CREATE TABLE IF NOT EXISTS ai_request_logs (
   id TEXT PRIMARY KEY,
+  -- ghostcli | gemini; nulo nos registros de antes de existir mais de um provedor.
+  provider TEXT,
   video_id TEXT,
   job_id TEXT,
   operation TEXT NOT NULL,
@@ -210,6 +218,21 @@ CREATE TABLE IF NOT EXISTS post_comments (
 
 CREATE INDEX IF NOT EXISTS idx_post_comments_video ON post_comments(video_id, position);
 
+-- Hashtags capturadas pela extensão. Antes era criada "na hora" dentro de
+-- saveVideoHashtags, e a leitura dava erro 500 num banco que nunca recebeu
+-- hashtag: a tabela ainda não existia.
+CREATE TABLE IF NOT EXISTS video_hashtags (
+  video_id TEXT PRIMARY KEY REFERENCES videos(id) ON DELETE CASCADE,
+  do_video_json TEXT NOT NULL DEFAULT '[]',
+  nos_comentarios_json TEXT NOT NULL DEFAULT '[]',
+  todas_json TEXT NOT NULL DEFAULT '[]',
+  -- Hashtags geradas pela IA na pagina de Exportacoes, com o motivo de cada
+  -- uma. Ficam separadas das capturadas: uma e sugestao, a outra e o que o
+  -- post de origem de fato usou.
+  ia_json TEXT NOT NULL DEFAULT '[]',
+  captured_at TEXT NOT NULL
+);
+
 -- Pedidos de captura de comentarios que a extensao consome por polling.
 -- O indice unico "um pedido aberto por video" e criado em db.ts, depois de
 -- remover as duplicatas de bancos antigos: criado aqui, falharia neles.
@@ -224,6 +247,15 @@ CREATE TABLE IF NOT EXISTS capture_queue (
   completed_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_capture_queue_status ON capture_queue(status);
+
+-- Legenda em japones gerada na pagina de Exportacoes. Separada do
+-- publish_kits: aquele e o kit completo em portugues, com outro prompt.
+CREATE TABLE IF NOT EXISTS video_jp_captions (
+  video_id TEXT PRIMARY KEY REFERENCES videos(id) ON DELETE CASCADE,
+  text TEXT NOT NULL,
+  hashtag TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS publish_kits (
   video_id TEXT PRIMARY KEY REFERENCES videos(id) ON DELETE CASCADE,
@@ -251,6 +283,9 @@ CREATE TABLE IF NOT EXISTS editor_templates (
   updated_at TEXT NOT NULL
 );
 
+-- Perfil de origem (Fase 9): o recorte de uma página, reaplicado aos vídeos
+-- dela. origin_key é a página ("tiktok:usuario"); aspect é largura/altura do
+-- vídeo em que o recorte foi desenhado — só vale para vídeos da mesma proporção.
 CREATE TABLE IF NOT EXISTS source_profiles (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -258,6 +293,8 @@ CREATE TABLE IF NOT EXISTS source_profiles (
   crop_y REAL NOT NULL,
   crop_w REAL NOT NULL,
   crop_h REAL NOT NULL,
+  origin_key TEXT,
+  aspect REAL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -298,6 +335,14 @@ CREATE TABLE IF NOT EXISTS editor_video_texts (
   updated_at TEXT NOT NULL
 );
 
+-- Efeitos por vídeo (aba Efeitos): espelhar, cortar, cor, velocidade, zoom,
+-- áudio. Sem linha = sem efeito. O conteúdo é validado por normalizeEffects.
+CREATE TABLE IF NOT EXISTS editor_video_effects (
+  video_id TEXT PRIMARY KEY REFERENCES videos(id) ON DELETE CASCADE,
+  config_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 -- Recorte por vídeo. Guardado em coordenadas normalizadas (0..1) para o mesmo
 -- perfil servir a 720x1280, 1080x1920 e 1440x2560 sem reconversão.
 CREATE TABLE IF NOT EXISTS editor_video_crops (
@@ -308,6 +353,9 @@ CREATE TABLE IF NOT EXISTS editor_video_crops (
   crop_h REAL NOT NULL,
   confidence REAL,
   source TEXT NOT NULL DEFAULT 'manual',
+  -- Perfil de onde o recorte veio (source = 'profile'). É cópia, não vínculo:
+  -- editar o perfil depois não muda o recorte já aplicado.
+  profile_id TEXT REFERENCES source_profiles(id) ON DELETE SET NULL,
   updated_at TEXT NOT NULL
 );
 `;

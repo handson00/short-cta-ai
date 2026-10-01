@@ -18,6 +18,8 @@ const OPTIONS: CtaOptions = {
 
 const ANALYSIS: SceneAnalysis = {
   sceneSummary: "Um personagem precisa tomar uma decisão sob ameaça imediata.",
+  plot: null,
+  keyLines: [],
   analysisLimitations: [],
   conflict: "decisão sob ameaça",
   curiosity: "o motivo da decisão",

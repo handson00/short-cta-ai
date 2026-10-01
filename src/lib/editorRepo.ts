@@ -9,6 +9,7 @@ import type {
   EditorExportSettings,
   SourceProfile,
 } from "./types";
+import { countEffects, normalizeEffects, type EditorEffects } from "./editor/effects";
 
 // =============================== TEMPLATES ==================================
 
@@ -108,6 +109,8 @@ interface ProfileRow {
   crop_y: number;
   crop_w: number;
   crop_h: number;
+  origin_key: string | null;
+  aspect: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -120,6 +123,8 @@ function mapProfile(row: ProfileRow): SourceProfile {
     cropY: row.crop_y,
     cropW: row.crop_w,
     cropH: row.crop_h,
+    originKey: row.origin_key,
+    aspect: row.aspect,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -127,7 +132,7 @@ function mapProfile(row: ProfileRow): SourceProfile {
 
 export function listSourceProfiles(): SourceProfile[] {
   const rows = db()
-    .prepare("SELECT * FROM source_profiles ORDER BY created_at DESC")
+    .prepare("SELECT * FROM source_profiles ORDER BY updated_at DESC")
     .all() as ProfileRow[];
   return rows.map(mapProfile);
 }
@@ -139,23 +144,80 @@ export function getSourceProfile(id: string): SourceProfile | null {
   return row ? mapProfile(row) : null;
 }
 
-export function createSourceProfile(
-  name: string,
-  crop: { x: number; y: number; w: number; h: number },
-): SourceProfile {
+export interface ProfileInput {
+  name: string;
+  crop: { x: number; y: number; width: number; height: number };
+  originKey: string | null;
+  aspect: number | null;
+}
+
+export function createSourceProfile(input: ProfileInput): SourceProfile {
   const id = newId("prf");
   const now = nowIso();
+  const c = input.crop;
   db()
     .prepare(
-      `INSERT INTO source_profiles (id, name, crop_x, crop_y, crop_w, crop_h, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO source_profiles (id, name, crop_x, crop_y, crop_w, crop_h, origin_key, aspect, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
-    .run(id, name, crop.x, crop.y, crop.w, crop.h, now, now);
+    .run(id, input.name, c.x, c.y, c.width, c.height, input.originKey, input.aspect, now, now);
   return getSourceProfile(id)!;
 }
 
+/**
+ * Atualiza nome e/ou recorte. Os vídeos que já receberam este perfil NÃO mudam:
+ * o recorte aplicado é cópia. Trocar o recorte de dezenas de vídeos por baixo,
+ * sem o usuário pedir, faria uma exportação já conferida sair diferente.
+ */
+export function updateSourceProfile(
+  id: string,
+  patch: { name?: string; crop?: ProfileInput["crop"]; aspect?: number | null },
+): SourceProfile | null {
+  const existing = getSourceProfile(id);
+  if (!existing) return null;
+  const c = patch.crop ?? { x: existing.cropX, y: existing.cropY, width: existing.cropW, height: existing.cropH };
+  db()
+    .prepare(
+      `UPDATE source_profiles SET name = ?, crop_x = ?, crop_y = ?, crop_w = ?, crop_h = ?, aspect = ?,
+         updated_at = ? WHERE id = ?`,
+    )
+    .run(
+      patch.name ?? existing.name,
+      c.x,
+      c.y,
+      c.width,
+      c.height,
+      patch.aspect !== undefined ? patch.aspect : existing.aspect,
+      nowIso(),
+      id,
+    );
+  return getSourceProfile(id);
+}
+
+/**
+ * Apaga o perfil. Os recortes que vieram dele continuam valendo — o vídeo não
+ * perde o recorte —, só deixam de apontar para um perfil que não existe mais.
+ *
+ * A limpeza é explícita pelo mesmo motivo de `deleteEditorTemplate`: em bancos
+ * antigos, `editor_video_crops.profile_id` entrou por ALTER TABLE, sem FK.
+ */
 export function deleteSourceProfile(id: string): void {
-  db().prepare("DELETE FROM source_profiles WHERE id = ?").run(id);
+  db().transaction(() => {
+    db().prepare("UPDATE editor_video_crops SET profile_id = NULL WHERE profile_id = ?").run(id);
+    db().prepare("DELETE FROM source_profiles WHERE id = ?").run(id);
+  })();
+}
+
+/** Quantos vídeos na edição estão com o recorte de cada perfil. */
+export function sourceProfileUsage(): Record<string, number> {
+  const rows = db()
+    .prepare(
+      `SELECT c.profile_id AS id, COUNT(*) AS n FROM editor_video_crops c
+       JOIN editor_videos ev ON ev.video_id = c.video_id
+       WHERE c.profile_id IS NOT NULL GROUP BY c.profile_id`,
+    )
+    .all() as Array<{ id: string; n: number }>;
+  return Object.fromEntries(rows.map((r) => [r.id, r.n]));
 }
 
 // ====================== VÍDEOS PROMOVIDOS PARA A EDIÇÃO =====================
@@ -261,6 +323,7 @@ interface CropRow {
   crop_h: number;
   confidence: number | null;
   source: string;
+  profile_id: string | null;
   updated_at: string;
 }
 
@@ -273,6 +336,7 @@ function mapCrop(row: CropRow): EditorCrop {
     normalized: true,
     confidence: row.confidence ?? undefined,
     source: row.source as EditorCrop["source"],
+    profileId: row.profile_id ?? null,
   };
 }
 
@@ -299,8 +363,8 @@ export function listVideoCrops(): Record<string, EditorCrop> {
  */
 export function saveVideoCrops(videoIds: string[], crop: EditorCrop): number {
   const stmt = db().prepare(
-    `INSERT INTO editor_video_crops (video_id, crop_x, crop_y, crop_w, crop_h, confidence, source, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO editor_video_crops (video_id, crop_x, crop_y, crop_w, crop_h, confidence, source, profile_id, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(video_id) DO UPDATE SET
        crop_x = excluded.crop_x,
        crop_y = excluded.crop_y,
@@ -308,12 +372,16 @@ export function saveVideoCrops(videoIds: string[], crop: EditorCrop): number {
        crop_h = excluded.crop_h,
        confidence = excluded.confidence,
        source = excluded.source,
+       profile_id = excluded.profile_id,
        updated_at = excluded.updated_at`,
   );
   const now = nowIso();
+  // Recorte manual ou automático gravado por cima de um de perfil desfaz o
+  // vínculo: a tela não pode continuar dizendo "do perfil X" depois do ajuste.
+  const profileId = crop.source === "profile" ? (crop.profileId ?? null) : null;
   const apply = db().transaction((ids: string[]) => {
     for (const id of ids) {
-      stmt.run(id, crop.x, crop.y, crop.width, crop.height, crop.confidence ?? null, crop.source, now);
+      stmt.run(id, crop.x, crop.y, crop.width, crop.height, crop.confidence ?? null, crop.source, profileId, now);
     }
     return ids.length;
   });
@@ -322,6 +390,49 @@ export function saveVideoCrops(videoIds: string[], crop: EditorCrop): number {
 
 export function deleteVideoCrop(videoId: string): void {
   db().prepare("DELETE FROM editor_video_crops WHERE video_id = ?").run(videoId);
+}
+
+// =========================== EFEITOS POR VÍDEO ==============================
+
+export function getVideoEffects(videoId: string): EditorEffects | null {
+  const row = db().prepare("SELECT config_json FROM editor_video_effects WHERE video_id = ?").get(videoId) as
+    | { config_json: string }
+    | undefined;
+  return row ? normalizeEffects(parseJson(row.config_json, {})) : null;
+}
+
+export function listVideoEffects(): Record<string, EditorEffects> {
+  const rows = db().prepare("SELECT video_id, config_json FROM editor_video_effects").all() as Array<{
+    video_id: string;
+    config_json: string;
+  }>;
+  const out: Record<string, EditorEffects> = {};
+  for (const r of rows) out[r.video_id] = normalizeEffects(parseJson(r.config_json, {}));
+  return out;
+}
+
+/**
+ * Grava os mesmos efeitos em vários vídeos ("Seleção" e "Todos"), numa
+ * transação: ou o lote inteiro recebe, ou nenhum — como o recorte.
+ * Efeitos todos desligados apagam a linha: "sem linha" é "sem efeito".
+ */
+export function saveVideoEffects(videoIds: string[], effects: EditorEffects): number {
+  const fx = normalizeEffects(effects);
+  const empty = countEffects(fx) === 0;
+  const upsert = db().prepare(
+    `INSERT INTO editor_video_effects (video_id, config_json, updated_at) VALUES (?, ?, ?)
+     ON CONFLICT(video_id) DO UPDATE SET config_json = excluded.config_json, updated_at = excluded.updated_at`,
+  );
+  const remove = db().prepare("DELETE FROM editor_video_effects WHERE video_id = ?");
+  const now = nowIso();
+  const apply = db().transaction((ids: string[]) => {
+    for (const id of ids) {
+      if (empty) remove.run(id);
+      else upsert.run(id, JSON.stringify(fx), now);
+    }
+    return ids.length;
+  });
+  return apply([...new Set(videoIds)]);
 }
 
 // ============================== EDITOR JOBS =================================

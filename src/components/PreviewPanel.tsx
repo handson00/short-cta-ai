@@ -268,6 +268,26 @@ export default function PreviewPanel({ videoSummary, onChanged, onClose }: Props
             </div>
           )}
 
+          {(video.sceneSummary || video.recommendedCta) && <CtaBasisNotice basis={video.ctaBasis} />}
+
+          {video.plot && (
+            <div className="rounded border border-accent/30 bg-ink-850/60 p-2 space-y-1">
+              <p className="text-[10px] uppercase tracking-wide text-accent-soft">Enredo (pela fala)</p>
+              <p className="text-xs leading-relaxed">{video.plot}</p>
+              {video.keyLines.length > 0 && (
+                <ul className="mt-1 space-y-1 border-t border-ink-700 pt-1">
+                  {video.keyLines.map((k, i) => (
+                    <li key={i} className="text-[11px] leading-snug">
+                      <span className="text-ink-500">{k.atSeconds != null ? `${k.atSeconds.toFixed(1)}s · ` : ""}</span>
+                      <span className="text-ink-200">&ldquo;{k.text}&rdquo;</span>
+                      {k.why && <span className="block text-[10px] text-ink-500">{k.why}</span>}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+
           {video.sceneSummary && (
             <div className="rounded border border-ink-700 bg-ink-850/60 p-2 space-y-1">
               <p className="text-[10px] uppercase tracking-wide text-ink-400">Resumo da Cena</p>
@@ -378,7 +398,29 @@ export default function PreviewPanel({ videoSummary, onChanged, onClose }: Props
               </button>
             </div>
 
+            {video.status === "awaiting_ai" && (
+              <p className="rounded border border-emerald-500/30 bg-emerald-500/5 p-2 text-[10px] leading-snug text-emerald-300">
+                Transcrição e texto da tela prontos. Os CTAs ainda não foram gerados: isso só gasta chamada paga
+                quando você pedir.
+              </p>
+            )}
+
             <div className="flex flex-wrap gap-1">
+              {video.status === "awaiting_ai" && (
+                <button
+                  className="btn-primary text-[10px] px-2 py-1"
+                  disabled={busy === "gen"}
+                  onClick={() =>
+                    void act("gen", `/api/videos/${video.id}/reanalyze`, {
+                      method: "POST",
+                      headers: { "content-type": "application/json" },
+                      body: JSON.stringify({ mode: "ai" }),
+                    })
+                  }
+                >
+                  Gerar CTAs
+                </button>
+              )}
               {video.status === "done" && (
                 <button
                   className="btn-quiet text-[10px] px-2 py-1"
@@ -388,7 +430,10 @@ export default function PreviewPanel({ videoSummary, onChanged, onClose }: Props
                   Regenerar
                 </button>
               )}
-              {(video.status === "done" || video.status === "error" || video.status === "canceled") && (
+              {(video.status === "done" ||
+                video.status === "error" ||
+                video.status === "canceled" ||
+                video.status === "awaiting_ai") && (
                 <button
                   className="btn-quiet text-[10px] px-2 py-1"
                   disabled={busy === "again"}
@@ -474,5 +519,39 @@ export default function PreviewPanel({ videoSummary, onChanged, onClose }: Props
         </div>
       )}
     </aside>
+  );
+}
+
+const BASIS_TEXT: Record<VideoSummary["ctaBasis"]["kind"], { tone: "ok" | "aviso" | "erro"; text: string }> = {
+  fala: { tone: "ok", text: "CTAs escritos a partir da fala: o enredo abaixo veio do diálogo." },
+  fala_versao_antiga: {
+    tone: "aviso",
+    text: "Este vídeo tem fala, mas foi analisado antes do enredo pela fala. \"Regenerar CTAs\" já lê a transcrição; \"Analisar novamente\" também monta o enredo.",
+  },
+  sem_fala: { tone: "aviso", text: "O vídeo não tem fala compreensível: os CTAs se apoiam só no texto da tela." },
+  falha_transcricao: {
+    tone: "erro",
+    text: "A transcrição FALHOU: os CTAs foram escritos sem ouvir o diálogo. \"Analisar novamente\" resolve.",
+  },
+  sem_transcricao: { tone: "aviso", text: "Nenhuma transcrição registrada para este vídeo." },
+};
+
+/**
+ * Diz em que os CTAs se apoiaram. Falha de transcrição tem cor e texto próprios:
+ * foi confundi-la com "vídeo sem fala" que escondeu 95 vídeos analisados surdos.
+ */
+function CtaBasisNotice({ basis }: { basis: VideoSummary["ctaBasis"] }) {
+  const info = BASIS_TEXT[basis.kind];
+  const color =
+    info.tone === "ok"
+      ? "border-emerald-500/30 bg-emerald-500/5 text-emerald-300"
+      : info.tone === "erro"
+        ? "border-red-500/30 bg-red-500/5 text-red-300"
+        : "border-amber-500/30 bg-amber-500/5 text-amber-200";
+  return (
+    <div className={`rounded border p-2 text-[10px] leading-snug ${color}`}>
+      {info.text}
+      {basis.detail && <span className="mt-0.5 block opacity-80">Motivo: {basis.detail}</span>}
+    </div>
   );
 }

@@ -36,6 +36,17 @@ export interface VideoSummary {
   attempts: number;
   maxAttempts: number;
   sceneSummary: string | null;
+  /** Enredo reconstruído pela fala; nulo quando a análise não teve fala. */
+  plot: string | null;
+  keyLines: { atSeconds: number | null; text: string; why: string | null }[];
+  /**
+   * Em que os CTAs se apoiaram. "falha_transcricao" nunca aparece como
+   * "sem_fala": um pede reanalisar, o outro não tem o que fazer.
+   */
+  ctaBasis: {
+    kind: "fala" | "fala_versao_antiga" | "sem_fala" | "falha_transcricao" | "sem_transcricao";
+    detail: string | null;
+  };
   recommendedCta: { text: string; reason: string } | null;
   existingCta: { text: string; confidence: string; firstSeenAtSeconds: number } | null;
   existingCtaReview: { strength: string | null; improvement: string | null } | null;

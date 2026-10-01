@@ -5,6 +5,8 @@ const TONE: Record<string, string> = {
   error: "border-red-500/40 bg-red-500/10 text-red-300",
   canceled: "border-ink-600 bg-ink-850 text-ink-400",
   queued: "border-ink-600 bg-ink-850 text-ink-300",
+  // Não é erro nem trabalho em andamento: a parte local terminou e espera o usuário.
+  awaiting_ai: "border-emerald-500/30 bg-emerald-500/5 text-emerald-200",
 };
 
 export default function StatusBadge({ status }: { status: JobStatus }) {

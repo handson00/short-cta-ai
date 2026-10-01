@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { env } from "../env";
 import { getVideo } from "../repo";
 import {
   cancelAllPendingEditorJobs,
@@ -9,6 +8,7 @@ import {
   createEditorJob,
   getEditorTemplate,
   getVideoCrop,
+  getVideoEffects,
   getVideoTemplateIds,
   listProcessingEditorJobIds,
   requeueInterruptedEditorJobs,
@@ -18,6 +18,7 @@ import {
 import type { EditorJob } from "../types";
 import { resolveEncoder, type EncoderMode } from "./encoder";
 import { cancelExport, renderVideo, ExportError } from "./export";
+import { outputDir } from "./outputDir";
 
 /**
  * Fila de exportacao do editor (spec §54-§57, §112, §113, §129).
@@ -124,10 +125,12 @@ export function enqueueExports(videoIds: string[], opts: EnqueueOptions = {}): E
       continue;
     }
 
+    const crop = getVideoCrop(videoId);
     const job = createEditorJob({
       videoId,
       templateId,
-      crop: getVideoCrop(videoId) ?? undefined,
+      profileId: crop?.profileId ?? null,
+      crop: crop ?? undefined,
       exportSettings: {
         // A resolução de saída é a do canvas do template.
         width: template.config.canvasWidth,
@@ -139,6 +142,9 @@ export function enqueueExports(videoIds: string[], opts: EnqueueOptions = {}): E
         textLayer: template.config.text?.enabled
           ? validTextLayer(videoId, opts.textLayers?.[videoId])
           : null,
+        // Fotografado agora, como o recorte: mudar os efeitos depois de mandar
+        // exportar não muda o job que já está na fila.
+        effects: getVideoEffects(videoId),
       },
     });
     result.jobIds.push(job.id);
@@ -179,6 +185,7 @@ async function runJob(job: EditorJob): Promise<void> {
         crop: job.crop,
         template: template.config,
         textLayer: job.exportSettings.textLayer ?? null,
+        effects: job.exportSettings.effects ?? null,
         fps: job.exportSettings.fps,
         encoder,
       },
@@ -225,13 +232,14 @@ function tick(): void {
 
 /** Arquivos `.processing` sem dono são restos de um render interrompido. */
 function removeOrphanPartials(): number {
-  if (!fs.existsSync(env.outputDir)) return 0;
+  const dir = outputDir();
+  if (!fs.existsSync(dir)) return 0;
   let removed = 0;
-  for (const name of fs.readdirSync(env.outputDir)) {
+  for (const name of fs.readdirSync(dir)) {
     // Só dentro da pasta gerenciada e só a extensão que nós mesmos criamos (§69).
     if (!name.endsWith(".processing")) continue;
     try {
-      fs.unlinkSync(path.join(env.outputDir, name));
+      fs.unlinkSync(path.join(dir, name));
       removed++;
     } catch {
       // Arquivo preso por outro programa: fica para a próxima inicialização.

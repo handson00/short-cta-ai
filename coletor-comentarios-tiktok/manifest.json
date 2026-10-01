@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Coletor de Comentarios TikTok",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Captura os comentarios, as respostas e as hashtags do video do TikTok aberto na aba atual.",
   "permissions": ["activeTab", "scripting", "storage", "tabs", "alarms"],
   "host_permissions": ["https://www.tiktok.com/*", "http://localhost:*/*", "http://127.0.0.1:*/*"],

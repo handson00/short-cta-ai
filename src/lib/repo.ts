@@ -6,6 +6,7 @@ import type {
   Confidence,
   CtaStyle,
   ExistingCtaDetection,
+  JobMode,
   JobStatus,
   SceneAnalysis,
   Transcript,
@@ -199,6 +200,7 @@ export interface JobRecord {
   retryable: boolean;
   cancelRequested: boolean;
   reuseScene: boolean;
+  mode: JobMode;
   createdAt: string;
   startedAt: string | null;
   finishedAt: string | null;
@@ -217,6 +219,7 @@ interface JobRow {
   retryable: number;
   cancel_requested: number;
   reuse_scene: number;
+  mode: string | null;
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
@@ -236,6 +239,7 @@ function mapJob(row: JobRow): JobRecord {
     retryable: toBool(row.retryable),
     cancelRequested: toBool(row.cancel_requested),
     reuseScene: toBool(row.reuse_scene),
+    mode: row.mode === "local" || row.mode === "ai" ? row.mode : "full",
     createdAt: row.created_at,
     startedAt: row.started_at,
     finishedAt: row.finished_at,
@@ -243,16 +247,68 @@ function mapJob(row: JobRow): JobRecord {
   };
 }
 
-export function createJob(videoId: string, options: { reuseScene?: boolean } = {}): JobRecord {
+export function createJob(
+  videoId: string,
+  options: { reuseScene?: boolean; mode?: JobMode } = {},
+): JobRecord {
   const id = newId("job");
   const now = nowIso();
   db()
     .prepare(
-      `INSERT INTO analysis_jobs (id, video_id, status, stage, reuse_scene, created_at, updated_at)
-       VALUES (?, ?, 'queued', 'queued', ?, ?, ?)`,
+      `INSERT INTO analysis_jobs (id, video_id, status, stage, reuse_scene, mode, created_at, updated_at)
+       VALUES (?, ?, 'queued', 'queued', ?, ?, ?, ?)`,
     )
-    .run(id, videoId, options.reuseScene ? 1 : 0, now, now);
+    .run(id, videoId, options.reuseScene ? 1 : 0, options.mode ?? "full", now, now);
   return getJob(id)!;
+}
+
+/** Status em que o vídeo já tem análise na fila ou rodando. */
+const OPEN_JOB_STATUSES = [
+  "queued",
+  "extracting_media",
+  "transcribing",
+  "reading_text",
+  "analyzing_scene",
+  "identifying_work",
+  "generating_ctas",
+];
+
+/**
+ * "Analisar novamente" para vários vídeos, sem nunca enfileirar em dobro.
+ *
+ * Um vídeo que já está na fila ou em análise é pulado: dois jobs do mesmo
+ * vídeo rodariam ao mesmo tempo sobre os mesmos frames, áudio e transcrição, e
+ * o resultado dependeria de quem terminasse por último. Checar e criar numa
+ * transação só é o que faz um duplo clique no lote não passar pela checagem.
+ */
+export function requestReanalysis(ids: string[], mode: JobMode = "full"): {
+  queued: string[];
+  skipped: { id: string; reason: string }[];
+} {
+  const database = db();
+  const queued: string[] = [];
+  const skipped: { id: string; reason: string }[] = [];
+  // "Existe job aberto?", e não "o último job está aberto?": `latestJob` ordena
+  // por created_at, e dois jobs criados no mesmo milissegundo empatam — o teste
+  // do duplo clique pegou o empate devolvendo o job antigo e enfileirando de novo.
+  const hasOpenJob = database.prepare(
+    `SELECT 1 FROM analysis_jobs WHERE video_id = ? AND status IN (${OPEN_JOB_STATUSES.map(() => "?").join(",")}) LIMIT 1`,
+  );
+  database.transaction(() => {
+    for (const id of [...new Set(ids)]) {
+      if (!getVideo(id)) {
+        skipped.push({ id, reason: "Vídeo não encontrado." });
+        continue;
+      }
+      if (hasOpenJob.get(id, ...OPEN_JOB_STATUSES)) {
+        skipped.push({ id, reason: "Já está na fila de análise." });
+        continue;
+      }
+      createJob(id, { reuseScene: false, mode });
+      queued.push(id);
+    }
+  })();
+  return { queued, skipped };
 }
 
 export function getJob(id: string): JobRecord | null {
@@ -260,19 +316,27 @@ export function getJob(id: string): JobRecord | null {
   return row ? mapJob(row) : null;
 }
 
+/**
+ * O job mais recente do vídeo. Desempate pela ordem de inserção (`rowid`):
+ * dois jobs criados no mesmo milissegundo empatam em `created_at`, e o empate
+ * devolvia às vezes o ANTIGO — status errado na Fila, modo errado no "Tentar
+ * novamente". Os testes pegavam isso de forma intermitente.
+ */
 export function latestJob(videoId: string): JobRecord | null {
   const row = db()
-    .prepare("SELECT * FROM analysis_jobs WHERE video_id = ? ORDER BY created_at DESC LIMIT 1")
+    .prepare("SELECT * FROM analysis_jobs WHERE video_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1")
     .get(videoId) as JobRow | undefined;
   return row ? mapJob(row) : null;
 }
 
 export function latestJobsByVideo(): Map<string, JobRecord> {
+  // Mesmo desempate de `latestJob`: com JOIN por MAX(created_at), um empate
+  // trazia duas linhas do vídeo e a última lida vencia, qualquer que fosse.
   const rows = db()
     .prepare(
       `SELECT j.* FROM analysis_jobs j
-       JOIN (SELECT video_id, MAX(created_at) AS created_at FROM analysis_jobs GROUP BY video_id) last
-         ON last.video_id = j.video_id AND last.created_at = j.created_at`,
+       WHERE j.rowid = (SELECT j2.rowid FROM analysis_jobs j2 WHERE j2.video_id = j.video_id
+                        ORDER BY j2.created_at DESC, j2.rowid DESC LIMIT 1)`,
     )
     .all() as JobRow[];
   const map = new Map<string, JobRecord>();
@@ -285,7 +349,7 @@ export function setJobStatus(
   status: JobStatus,
   patch: { errorCode?: string | null; errorMessage?: string | null; retryable?: boolean } = {},
 ): void {
-  const finished = ["done", "error", "canceled"].includes(status);
+  const finished = ["done", "error", "canceled", "awaiting_ai"].includes(status);
   db()
     .prepare(
       `UPDATE analysis_jobs SET status = ?, stage = ?, error_code = ?, error_message = ?,
@@ -313,7 +377,7 @@ export function requestCancel(videoId: string): boolean {
     releaseLease(job.id);
     return true;
   }
-  if (["done", "error", "canceled"].includes(job.status)) return false;
+  if (["done", "error", "canceled", "awaiting_ai"].includes(job.status)) return false;
   db().prepare("UPDATE analysis_jobs SET cancel_requested = 1, updated_at = ? WHERE id = ?").run(nowIso(), job.id);
   return true;
 }
@@ -560,21 +624,31 @@ export interface StoredSceneAnalysis extends SceneAnalysis {
   model: string | null;
   createdAt: string;
   recommended: { text: string; reason: string } | null;
+  /** Impressão digital do que a análise enviou à IA (ver `pipeline/aiCache.ts`). */
+  inputHash: string | null;
+  /** Idem, da última geração de CTAs feita sobre esta análise. */
+  ctasInputHash: string | null;
 }
 
 export function saveSceneAnalysis(
   videoId: string,
   analysis: SceneAnalysis,
-  meta: { promptVersion: string; model: string; recommended?: { text: string; reason: string } | null },
+  meta: {
+    promptVersion: string;
+    model: string;
+    recommended?: { text: string; reason: string } | null;
+    inputHash?: string | null;
+  },
 ): string {
   const id = newId("scn");
   db()
     .prepare(
       `INSERT INTO scene_analyses (id, video_id, summary, limitations_json, conflict, curiosity, withhold,
          speculation_json, existing_cta_strength, existing_cta_improvement, recommended_text, recommended_reason,
-         raw_json, prompt_version, model, created_at)
+         raw_json, prompt_version, model, input_hash, created_at)
        VALUES (@id, @videoId, @summary, @limitations, @conflict, @curiosity, @withhold, @speculation,
-               @strength, @improvement, @recommendedText, @recommendedReason, @raw, @promptVersion, @model, @createdAt)`,
+               @strength, @improvement, @recommendedText, @recommendedReason, @raw, @promptVersion, @model,
+               @inputHash, @createdAt)`,
     )
     .run({
       id,
@@ -592,9 +666,15 @@ export function saveSceneAnalysis(
       raw: JSON.stringify({ ...analysis, context: undefined }),
       promptVersion: meta.promptVersion,
       model: meta.model,
+      inputHash: meta.inputHash ?? null,
       createdAt: nowIso(),
     });
   return id;
+}
+
+/** Marca a impressão digital da geração de CTAs feita sobre esta análise. */
+export function setCtasInputHash(analysisId: string, hash: string): void {
+  db().prepare("UPDATE scene_analyses SET ctas_input_hash = ? WHERE id = ?").run(hash, analysisId);
 }
 
 export function updateSceneRecommendation(analysisId: string, recommended: { text: string; reason: string }): void {
@@ -622,6 +702,8 @@ export function latestSceneAnalysis(videoId: string): StoredSceneAnalysis | null
         raw_json: string;
         prompt_version: string;
         model: string | null;
+        input_hash: string | null;
+        ctas_input_hash: string | null;
         created_at: string;
       }
     | undefined;
@@ -629,6 +711,8 @@ export function latestSceneAnalysis(videoId: string): StoredSceneAnalysis | null
 
   const raw = parseJson<SceneAnalysis>(row.raw_json, {
     sceneSummary: row.summary,
+    plot: null,
+    keyLines: [],
     analysisLimitations: [],
     conflict: row.conflict,
     curiosity: row.curiosity,
@@ -641,6 +725,11 @@ export function latestSceneAnalysis(videoId: string): StoredSceneAnalysis | null
   return {
     ...raw,
     sceneSummary: row.summary,
+    // Análises anteriores ao enredo pela fala (prompt 2026-09-29) não têm estes
+    // campos no raw_json; sem enredo é nulo, não string vazia.
+    plot: raw.plot ?? null,
+    keyLines: Array.isArray(raw.keyLines) ? raw.keyLines : [],
+    evidenceBasis: raw.evidenceBasis,
     analysisLimitations: parseJson<string[]>(row.limitations_json, []),
     conflict: row.conflict,
     curiosity: row.curiosity,
@@ -651,6 +740,8 @@ export function latestSceneAnalysis(videoId: string): StoredSceneAnalysis | null
     model: row.model,
     createdAt: row.created_at,
     recommended: row.recommended_text ? { text: row.recommended_text, reason: row.recommended_reason ?? "" } : null,
+    inputHash: row.input_hash ?? null,
+    ctasInputHash: row.ctas_input_hash ?? null,
   };
 }
 
@@ -871,9 +962,22 @@ export interface CommentInput {
  * nova captura representa o estado atual do post. Acumular produziria uma
  * mistura de leituras de datas diferentes sem como distinguir uma da outra.
  */
-export function replaceComments(videoId: string, platform: string, comments: CommentInput[]): number {
+export function replaceComments(
+  videoId: string,
+  platform: string,
+  comments: CommentInput[],
+  opts: { append?: boolean } = {},
+): number {
   const agora = nowIso();
   const apagar = db().prepare("DELETE FROM post_comments WHERE video_id = ?");
+  // `append`: continuação da MESMA captura, mandada em pedaços. Sem isto, cada
+  // pedaço apagava o anterior e um vídeo com mais de 200 comentários ficava só
+  // com os do último pedaço.
+  const inicio = opts.append
+    ? (((db().prepare("SELECT MAX(position) AS p FROM post_comments WHERE video_id = ?").get(videoId) as
+        | { p: number | null }
+        | undefined)?.p ?? -1) + 1)
+    : 0;
   const inserir = db().prepare(
     `INSERT INTO post_comments
        (id, video_id, platform, external_id, parent_external_id, author, text, like_count, published_label, position, captured_at)
@@ -881,7 +985,7 @@ export function replaceComments(videoId: string, platform: string, comments: Com
   );
 
   const tx = db().transaction((items: CommentInput[]) => {
-    apagar.run(videoId);
+    if (!opts.append) apagar.run(videoId);
     let n = 0;
     for (const [i, c] of items.entries()) {
       const texto = (c.text ?? "").trim();
@@ -896,7 +1000,7 @@ export function replaceComments(videoId: string, platform: string, comments: Com
         texto,
         typeof c.likeCount === "number" ? c.likeCount : null,
         c.publishedLabel ?? null,
-        i,
+        inicio + i,
         agora,
       );
       n += 1;
@@ -950,17 +1054,13 @@ export function saveVideoHashtags(
 ): void {
   const agora = nowIso();
 
-  // Garante que a tabela existe ANTES de preparar o statement — o SQLite falha
-  // ao preparar INSERT contra tabela inexistente, causando HTTP 500 silencioso.
-  db().exec(`
-    CREATE TABLE IF NOT EXISTS video_hashtags (
-      video_id TEXT PRIMARY KEY REFERENCES videos(id) ON DELETE CASCADE,
-      do_video_json TEXT NOT NULL DEFAULT '[]',
-      nos_comentarios_json TEXT NOT NULL DEFAULT '[]',
-      todas_json TEXT NOT NULL DEFAULT '[]',
-      captured_at TEXT NOT NULL
-    )
-  `);
+  // A extensão manda os comentários em pedaços e só o primeiro traz as
+  // hashtags; os seguintes vêm com as listas vazias. Gravar o vazio apagava as
+  // hashtags do primeiro pedaço. Vazio aqui não é "o vídeo não tem hashtag":
+  // é "este pedido não traz hashtag".
+  const vazio =
+    !(hashtags.doVideo?.length) && !(hashtags.nosComentarios?.length) && !(hashtags.todas?.length);
+  if (vazio) return;
 
   const upsert = db().prepare(
     `INSERT INTO video_hashtags (video_id, do_video_json, nos_comentarios_json, todas_json, captured_at)
@@ -981,14 +1081,52 @@ export function saveVideoHashtags(
   );
 }
 
+/**
+ * Hashtags sugeridas pela IA para o vídeo, com o motivo de cada uma.
+ *
+ * Ficam numa coluna à parte das capturadas: uma coisa é o que o post de origem
+ * usou, outra é o que a IA sugeriu. Misturar as duas faria a tela apresentar
+ * sugestão como fato observado.
+ */
+export function saveAiHashtags(videoId: string, tags: Array<{ tag: string; reason: string | null }>): void {
+  db()
+    .prepare(
+      `INSERT INTO video_hashtags (video_id, do_video_json, nos_comentarios_json, todas_json, ia_json, captured_at)
+       VALUES (?, '[]', '[]', '[]', ?, ?)
+       ON CONFLICT(video_id) DO UPDATE SET ia_json = excluded.ia_json`,
+    )
+    .run(videoId, JSON.stringify(tags), nowIso());
+}
+
+/** Legenda em japonês do vídeo, com a hashtag que a abriu. */
+export function saveJapaneseCaption(videoId: string, text: string, hashtag: string): void {
+  db()
+    .prepare(
+      `INSERT INTO video_jp_captions (video_id, text, hashtag, updated_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT(video_id) DO UPDATE SET text = excluded.text, hashtag = excluded.hashtag,
+         updated_at = excluded.updated_at`,
+    )
+    .run(videoId, text, hashtag, nowIso());
+}
+
+export function getJapaneseCaption(videoId: string): { text: string; hashtag: string } | null {
+  const row = db().prepare("SELECT text, hashtag FROM video_jp_captions WHERE video_id = ?").get(videoId) as
+    | { text: string; hashtag: string }
+    | undefined;
+  return row ?? null;
+}
+
 export function getVideoHashtags(videoId: string): {
   doVideo: string[];
   nosComentarios: Array<{ tag: string; vezes: number }>;
   todas: string[];
+  ia: Array<{ tag: string; reason: string | null }>;
 } | null {
   const row = db()
-    .prepare("SELECT do_video_json, nos_comentarios_json, todas_json FROM video_hashtags WHERE video_id = ?")
-    .get(videoId) as { do_video_json: string; nos_comentarios_json: string; todas_json: string } | undefined;
+    .prepare("SELECT do_video_json, nos_comentarios_json, todas_json, ia_json FROM video_hashtags WHERE video_id = ?")
+    .get(videoId) as
+    | { do_video_json: string; nos_comentarios_json: string; todas_json: string; ia_json: string }
+    | undefined;
 
   if (!row) return null;
 
@@ -1000,6 +1138,7 @@ export function getVideoHashtags(videoId: string): {
     doVideo: parseJson<string[]>(row.do_video_json, []),
     nosComentarios: parseJson<Array<{ tag: string; vezes: number }>>(row.nos_comentarios_json, []),
     todas: parseJson<string[]>(row.todas_json, []),
+    ia: parseJson<Array<{ tag: string; reason: string | null }>>(row.ia_json, []),
   };
 }
 

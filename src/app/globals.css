@@ -11,8 +11,11 @@ body {
   @apply bg-ink-950 text-ink-100 antialiased;
   /* O editor ocupa a largura da janela saindo do container central. Sem isto,
      a diferença entre 100vw e a área útil (a barra de rolagem) criaria uma
-     barra horizontal de poucos pixels na página inteira. */
-  overflow-x: hidden;
+     barra horizontal de poucos pixels na página inteira.
+     `clip`, e não `hidden`: `hidden` transforma o body num contêiner de rolagem
+     que nunca rola, e todo `position: sticky` (o cabeçalho, o painel de preview
+     do editor) passa a grudar nele em vez de na janela — ou seja, não gruda. */
+  overflow-x: clip;
 }
 
 body {

@@ -38,6 +38,7 @@ export default function Library() {
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [bulkCapturing, setBulkCapturing] = useState(false);
   const [bulkSending, setBulkSending] = useState(false);
+  const [bulkReanalyzing, setBulkReanalyzing] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const folderRef = useRef<HTMLInputElement>(null);
 
@@ -152,6 +153,14 @@ export default function Library() {
     return result;
   }, [videos, filter, searchTerm]);
 
+  // Dentro do filtro atual, como "Selecionar todos": selecionar o que não se vê
+  // na tela faria o lote agir em vídeos que o usuário não conferiu.
+  const semTranscricao = useMemo(
+    () => filtered.filter((v) => v.ctaBasis?.kind === "falha_transcricao"),
+    [filtered],
+  );
+  const aguardandoCta = useMemo(() => filtered.filter((v) => v.status === "awaiting_ai"), [filtered]);
+
   const cancelAll = useCallback(async () => {
     const confirmed = window.confirm("Cancelar todos os processos na fila e em andamento?");
     if (!confirmed) return;
@@ -205,6 +214,69 @@ export default function Library() {
       await refresh();
     } finally {
       setBulkDeleting(false);
+    }
+  }
+
+  /**
+   * Reanalisa a seleção antes de mandar para a edição.
+   *
+   * A confirmação diz o custo e o efeito colateral: cada vídeo faz 2 chamadas
+   * à IA (pagas no GhostCLI, cota no Gemini), e as sugestões são refeitas — o CTA escolhido na Fila é
+   * desfeito (o texto editado fica), o que também muda o texto no editor.
+   */
+  async function reanalyzeSelected(mode: "full" | "ai") {
+    const ids = [...selectedIds];
+    if (ids.length === 0) return;
+    const naFila = videos.filter(
+      (v) => selectedIds.has(v.id) && (v.status === "queued" || ACTIVE_STATUSES.includes(v.status)),
+    ).length;
+    const aReanalisar = ids.length - naFila;
+    if (aReanalisar === 0) {
+      alert("Todos os vídeos selecionados já estão na fila de análise.");
+      return;
+    }
+    const escolhidos = videos.filter((v) => selectedIds.has(v.id) && v.chosenText).length;
+    const confirmado = window.confirm(
+      [
+        mode === "ai" ? `Gerar CTAs de ${aReanalisar} vídeo(s)?` : `Analisar novamente ${aReanalisar} vídeo(s)?`,
+        mode === "ai"
+          ? `Custo: até ${aReanalisar * 2} chamadas à IA (pagas no GhostCLI; no Gemini gratuito, contam na cota). Usa a transcrição e o texto da tela já lidos.`
+          : `Custo: até ${aReanalisar * 2} chamadas à IA (pagas no GhostCLI; no Gemini gratuito, contam na cota), e a transcrição roda de novo neste computador.`,
+        "Vídeo cujo conteúdo não mudou desde a última vez reaproveita o resultado salvo, sem custo.",
+        naFila > 0 ? `${naFila} já estão na fila e serão pulados.` : "",
+        escolhidos > 0
+          ? `${escolhidos} têm CTA escolhido: se as sugestões forem refeitas, a escolha é desfeita (texto editado é mantido).`
+          : "",
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
+    );
+    if (!confirmado) return;
+
+    setBulkReanalyzing(true);
+    try {
+      const res = await fetch("/api/videos/bulk-reanalyze", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ids, mode }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        queuedCount?: number;
+        skipped?: { id: string; reason: string }[];
+        error?: string;
+      };
+      if (!res.ok) {
+        alert(data.error ?? "Falha ao enfileirar a reanálise.");
+        return;
+      }
+      const pulados = data.skipped?.length ? ` ${data.skipped.length} pulado(s): ${data.skipped[0].reason}` : "";
+      alert(`${data.queuedCount ?? 0} vídeo(s) na fila para ${mode === "ai" ? "gerar CTAs" : "analisar novamente"}.${pulados}`);
+      setSelectedIds(new Set());
+      await refresh();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Falha ao enfileirar a reanálise.");
+    } finally {
+      setBulkReanalyzing(false);
     }
   }
 
@@ -456,15 +528,49 @@ export default function Library() {
               >
                 Selecionar todos ({filtered.length})
               </button>
+              {semTranscricao.length > 0 && (
+                <button
+                  className="btn-quiet px-2 py-0.5 text-[10px] text-red-300"
+                  title="Vídeos cuja transcrição falhou: os CTAs foram escritos sem ouvir a fala"
+                  onClick={() => setSelectedIds(new Set(semTranscricao.map((v) => v.id)))}
+                >
+                  Selecionar transcrição falhada ({semTranscricao.length})
+                </button>
+              )}
+              {aguardandoCta.length > 0 && (
+                <button
+                  className="btn-quiet px-2 py-0.5 text-[10px] text-emerald-300"
+                  title="Vídeos já transcritos e lidos, esperando você pedir os CTAs"
+                  onClick={() => setSelectedIds(new Set(aguardandoCta.map((v) => v.id)))}
+                >
+                  Selecionar aguardando CTA ({aguardandoCta.length})
+                </button>
+              )}
               {selectedIds.size > 0 && (
                 <>
                   <button className="btn-quiet px-2 py-0.5 text-[10px]" onClick={() => setSelectedIds(new Set())}>
                     Limpar seleção
                   </button>
                   <button
-                    className="btn px-2 py-0.5 text-[10px] bg-accent/90 text-white hover:bg-accent ml-auto"
+                    className="btn px-2 py-0.5 text-[10px] bg-emerald-600/90 text-white hover:bg-emerald-600 ml-auto"
+                    onClick={() => void reanalyzeSelected("ai")}
+                    disabled={bulkReanalyzing || bulkSending || bulkCapturing || bulkDeleting}
+                    title="Gera os CTAs com IA usando a transcrição e o texto da tela já lidos. Custa chamadas pagas."
+                  >
+                    {bulkReanalyzing ? "Enfileirando…" : `Gerar CTAs (${selectedIds.size})`}
+                  </button>
+                  <button
+                    className="btn px-2 py-0.5 text-[10px] bg-amber-600/90 text-white hover:bg-amber-600"
+                    onClick={() => void reanalyzeSelected("full")}
+                    disabled={bulkReanalyzing || bulkSending || bulkCapturing || bulkDeleting}
+                    title="Refaz transcrição, texto da tela, análise e CTAs dos selecionados. Custa chamadas pagas."
+                  >
+                    {bulkReanalyzing ? "Enfileirando…" : `Analisar novamente (${selectedIds.size})`}
+                  </button>
+                  <button
+                    className="btn px-2 py-0.5 text-[10px] bg-accent/90 text-white hover:bg-accent"
                     onClick={() => void sendSelectedToEditor()}
-                    disabled={bulkSending || bulkCapturing || bulkDeleting}
+                    disabled={bulkSending || bulkCapturing || bulkDeleting || bulkReanalyzing}
                   >
                     {bulkSending ? "Enviando…" : `Enviar para edição (${selectedIds.size})`}
                   </button>

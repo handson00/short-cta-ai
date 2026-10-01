@@ -141,3 +141,25 @@ describe("fila persistente", () => {
     expect(repo.findVideoByHash(video.hash)?.id).toBe(video.id);
   });
 });
+
+describe("pistas da fila (2026-09-29)", () => {
+  it("'Gerar CTAs' não espera atrás de transcrição: cada pista pega só o seu", () => {
+    drain();
+    const importado = makeVideo("pista_local");
+    const pronto = makeVideo("pista_ai");
+    // O de importação entra primeiro: sem pistas, ele seria o próximo de qualquer jeito.
+    const local = repo.createJob(importado.id, { mode: "local" });
+    const ai = repo.createJob(pronto.id, { mode: "ai" });
+
+    expect(queue.claimNextJob("ai")?.id).toBe(ai.id);
+    expect(queue.claimNextJob("ai")).toBeNull();
+    expect(queue.claimNextJob("local")?.id).toBe(local.id);
+  });
+
+  it("job completo ('Analisar novamente') vai para a pista que transcreve", () => {
+    drain();
+    const job = repo.createJob(makeVideo("pista_full").id);
+    expect(queue.claimNextJob("ai")).toBeNull();
+    expect(queue.claimNextJob("local")?.id).toBe(job.id);
+  });
+});

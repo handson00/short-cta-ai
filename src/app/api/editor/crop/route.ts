@@ -18,7 +18,9 @@ const cropSchema = z
       y: z.number().min(0).max(1),
       width: z.number().gt(0).max(1),
       height: z.number().gt(0).max(1),
-      source: z.enum(["auto", "profile", "manual"]).default("manual"),
+      // "profile" não entra por aqui: um recorte só vira "do perfil" pela rota
+      // /api/editor/profiles/apply, que confere página e proporção.
+      source: z.enum(["auto", "manual"]).default("manual"),
       confidence: z.number().min(0).max(100).optional(),
     }),
   })

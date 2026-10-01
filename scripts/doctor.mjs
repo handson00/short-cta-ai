@@ -134,6 +134,11 @@ if (!fs.existsSync(envPath)) {
   else if (cfg("APP_PASSWORD", "") === "troque-esta-senha")
     warn(".env.local", "APP_PASSWORD ainda é o valor de exemplo", "Troque por uma senha sua");
   else ok(".env.local", "segredos definidos");
+
+  // Informativo: a chave do Gemini também pode estar salva pela tela (no
+  // banco, criptografada), o que este diagnóstico não lê.
+  if (cfg("GEMINI_API_KEY", "")) ok("Google Gemini", "GEMINI_API_KEY definida no .env.local");
+  else ok("Google Gemini", "sem GEMINI_API_KEY no .env.local (a chave pode estar salva em Configurações)");
 }
 
 const icon = { ok: "  ok  ", aviso: " aviso", falta: " falta" };

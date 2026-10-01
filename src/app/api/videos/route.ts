@@ -40,6 +40,9 @@ export async function POST(request: Request) {
 
     const settings = getSettings();
     const maxBytes = settings.limits.maxFileSizeMb * 1024 * 1024;
+    // Sem "gerar ao importar", a importação só faz a parte local; a IA roda
+    // quando o usuário selecionar e clicar em "Gerar CTAs".
+    const mode = settings.toggles.aiOnImport ? "full" : "local";
     const results: UploadOutcome[] = [];
 
     for (const file of files) {
@@ -59,7 +62,12 @@ export async function POST(request: Request) {
           results.push({ file: displayName, status: "duplicate", videoId: existing.id, reason: "Arquivo idêntico já importado." });
           continue;
         }
-        repo.createJob(existing.id);
+        // Duplicado reenfileirado pelo usuário: é um "analisar novamente".
+        const again = repo.requestReanalysis([existing.id]);
+        if (again.queued.length === 0) {
+          results.push({ file: displayName, status: "duplicate", videoId: existing.id, reason: again.skipped[0]?.reason ?? "Não foi possível reenfileirar." });
+          continue;
+        }
         results.push({ file: displayName, status: "queued", videoId: existing.id, reason: "Duplicado reenfileirado." });
         continue;
       }
@@ -83,7 +91,7 @@ export async function POST(request: Request) {
           originalUrl: source.originalUrl,
         },
       });
-      repo.createJob(video.id);
+      repo.createJob(video.id, { mode });
       results.push({ file: displayName, status: "queued", videoId: video.id });
     }
 

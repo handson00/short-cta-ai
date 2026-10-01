@@ -23,6 +23,9 @@ export function db(): Database.Database {
 
   migrateTiktokColumns(handle);
   migrateEditorColumns(handle);
+  migrateSourceProfileColumns(handle);
+  migrateAiOnDemandColumns(handle);
+  migrateAiProviderColumn(handle);
   migrateCaptureQueueUnique(handle);
 
   instance = handle;
@@ -61,6 +64,56 @@ function migrateEditorColumns(handle: Database.Database): void {
     // Sem REFERENCES: o SQLite não cria chave estrangeira por ALTER TABLE.
     // Por isso `deleteEditorTemplate` limpa as referências explicitamente.
     handle.exec("ALTER TABLE editor_videos ADD COLUMN template_id TEXT");
+  }
+}
+
+/**
+ * Fase 9: página e proporção do perfil, e o perfil de origem de cada recorte.
+ *
+ * Como em `template_id`, a coluna que entra por ALTER não ganha a chave
+ * estrangeira: `deleteSourceProfile` limpa `profile_id` explicitamente.
+ */
+function migrateSourceProfileColumns(handle: Database.Database): void {
+  const cols = (table: string) =>
+    new Set((handle.pragma(`table_info(${table})`) as { name: string }[]).map((c) => c.name));
+
+  const profiles = cols("source_profiles");
+  if (!profiles.has("origin_key")) handle.exec("ALTER TABLE source_profiles ADD COLUMN origin_key TEXT");
+  if (!profiles.has("aspect")) handle.exec("ALTER TABLE source_profiles ADD COLUMN aspect REAL");
+
+  if (!cols("editor_video_crops").has("profile_id")) {
+    handle.exec("ALTER TABLE editor_video_crops ADD COLUMN profile_id TEXT");
+  }
+}
+
+/**
+ * IA sob demanda: modo do job e a impressão digital do que foi enviado à IA.
+ * Jobs antigos ficam como 'full', que é o que eles de fato fizeram.
+ */
+function migrateAiOnDemandColumns(handle: Database.Database): void {
+  const cols = (table: string) =>
+    new Set((handle.pragma(`table_info(${table})`) as { name: string }[]).map((c) => c.name));
+  if (!cols("analysis_jobs").has("mode")) {
+    handle.exec("ALTER TABLE analysis_jobs ADD COLUMN mode TEXT NOT NULL DEFAULT 'full'");
+  }
+  const scene = cols("scene_analyses");
+  if (!scene.has("input_hash")) handle.exec("ALTER TABLE scene_analyses ADD COLUMN input_hash TEXT");
+  if (!scene.has("ctas_input_hash")) handle.exec("ALTER TABLE scene_analyses ADD COLUMN ctas_input_hash TEXT");
+}
+
+/**
+ * Qual provedor atendeu cada chamada (GhostCLI ou Gemini). Sem esta coluna o
+ * INSERT de `logAiRequest` falharia — e ele engole o erro de propósito, então
+ * "Uso da IA" pararia de registrar sem ninguém perceber.
+ */
+function migrateAiProviderColumn(handle: Database.Database): void {
+  const cols = new Set((handle.pragma("table_info(ai_request_logs)") as { name: string }[]).map((c) => c.name));
+  if (!cols.has("provider")) handle.exec("ALTER TABLE ai_request_logs ADD COLUMN provider TEXT");
+
+  // Hashtags sugeridas pela IA, ao lado das capturadas pela extensão.
+  const tags = new Set((handle.pragma("table_info(video_hashtags)") as { name: string }[]).map((c) => c.name));
+  if (tags.size > 0 && !tags.has("ia_json")) {
+    handle.exec("ALTER TABLE video_hashtags ADD COLUMN ia_json TEXT NOT NULL DEFAULT '[]'");
   }
 }
 

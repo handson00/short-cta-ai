@@ -103,9 +103,15 @@ sem vídeo.
 | `/api/editor/smart-crop` | POST | Detecção automática; até 50 vídeos por chamada |
 | `/api/editor/templates` | GET · POST · PUT · DELETE | CRUD de templates; POST com `videoIds` aplica a vídeos |
 | `/api/editor/template-asset` | GET · POST | Envio e entrega de imagens, fontes (TTF/OTF) e músicas; o campo `expect` recusa o tipo errado |
+| `/api/editor/profiles` | GET · POST · PUT · DELETE | Perfis de origem; o POST recebe o vídeo em que o recorte foi desenhado, de onde saem página e proporção |
+| `/api/editor/profiles/apply` | POST | Aplica um perfil a vídeos; recusa proporção diferente e mantém recorte manual (salvo `replaceManual`) |
+| `/api/editor/effects` | GET · POST | Efeitos por vídeo; `scope: "all"` grava em todos os vídeos da edição, resolvidos no servidor |
 | `/api/editor/text` | PUT | Texto próprio de um vídeo (vazio volta ao CTA da análise) |
 | `/api/editor/text-layer` | POST | Recebe a camada de texto que o navegador desenhou (PNG) |
 | `/api/editor/export` | GET · POST · DELETE | Estado da fila, enfileirar, cancelar/limpar |
+| `/api/exports` | GET | Os vídeos prontos, com tudo para publicar (página `/exports`) |
+| `/api/exports/[jobId]/media` | GET | Serve o MP4 exportado; o caminho vem do job, nunca do cliente |
+| `/api/exports/hashtags` | POST | Gera 2 hashtags por vídeo e, se ligada, a legenda em japonês |
 | `/api/editor/import` | POST | Upload manual — **sem interface desde a Fase 5.1**, mantido de propósito |
 | `/api/editor/thumbnail` | GET | Miniatura do upload manual |
 
@@ -133,7 +139,12 @@ adicionadas depois migram em `src/lib/db.ts`.
 | `editor_templates` | Templates; a configuração inteira em `config_json` |
 | `editor_jobs` | Fila de exportação: status, progresso, arquivo de saída, erro; a camada de texto fica em `export_json.textLayer` |
 | `editor_video_texts` | Texto próprio do vídeo no editor; sem linha, vale o CTA da análise |
-| `source_profiles` | ❌ criada, sem uso — entra na Fase 9 |
+| `editor_video_effects` | Efeitos por vídeo (espelho, corte, cor, velocidade, zoom, áudio); sem linha = sem efeito |
+| `video_jp_captions` | Legenda em japonês gerada na página de Exportações |
+| `source_profiles` | Perfil de origem (Fase 9): recorte, página (`origin_key`) e proporção (`aspect`) do vídeo em que foi desenhado |
+
+`editor_video_crops.profile_id` diz de qual perfil o recorte foi copiado. É
+cópia, não vínculo: editar ou excluir o perfil não muda o recorte do vídeo.
 
 A spec §138 pede migrations versionadas. O projeto usa DDL idempotente aplicada
 na inicialização (§159: priorizar o padrão existente). Consequências a saber:
@@ -167,6 +178,12 @@ e não aplicado, ou template com alterações não salvas.
 cabe na caixa sem deformar dos dois lados: `object-contain` no navegador,
 `force_original_aspect_ratio=decrease` no FFmpeg.
 
+**Qual perfil serve a um vídeo.** `matchProfile` (`lib/editor/profile.ts`):
+mesma página e mesma proporção (tolerância de 2%); entre vários, o atualizado
+por último. A tela e a aplicação em lote usam a mesma função. Ordem da §90:
+perfil conhecido → Smart Crop → ajuste manual — e recorte manual nunca é
+trocado em lote.
+
 **Qual texto vai sobre o vídeo.** O texto próprio definido no editor; senão o CTA
 pela regra da Fila (`view.ts`): editado, senão escolhido; a recomendação da
 análise só por último, e a tela diz a origem.
@@ -182,6 +199,17 @@ texto) passa por `scale=...:out_color_matrix=bt709:out_range=tv` e é etiquetada
 em seguida. 23 dos 98 vídeos do acervo são BT.601; só etiquetar a saída fazia o
 filme sair com a cor desviada. Origem sem matriz declarada: HD = BT.709, abaixo
 de 720p = BT.601 (a convenção dos players).
+
+**Efeitos acontecem na mesma geometria dos dois lados.** `effects.ts` é puro e
+serve ao preview e ao `filterGraph`: o zoom vira o mesmo recorte centralizado,
+o espelho inverte a região recortada (não o quadro inteiro), e o corte de
+início/fim entra como `-ss`/`-t` na ENTRADA, para o grafo receber só o trecho
+escolhido com o tempo começando em zero. A duração de saída (trecho ÷
+velocidade) é a que fecha a janela do texto e corta a música.
+
+**A pasta de saída é configurável.** `lib/editor/outputDir.ts` resolve a
+configurada ou a padrão, e valida ESCREVENDO um arquivo de teste — pasta de
+rede ou sem permissão passa no `existsSync` e falha na hora de gravar.
 
 **Duração: o vídeo é a única fonte finita.** Toda imagem entra com `-loop 1`, a
 música com `-stream_loop -1` e `atrim` pela duração, e todo overlay usa
@@ -214,6 +242,5 @@ música com `-stream_loop -1` e `atrim` pela duração, e todo overlay usa
 - **Proxy de preview** (§41): a aba Preview compõe no navegador. A geometria é a
   mesma da exportação; a reamostragem de imagem é a do navegador, não a do
   FFmpeg.
-- **Perfis de origem** (Fase 9): gravar o recorte de uma página e reaplicar.
 - **Música no preview:** a aba Preview toca o vídeo mudo; a música só existe no
   arquivo exportado.

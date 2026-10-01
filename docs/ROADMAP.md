@@ -16,14 +16,15 @@ Legenda: ✅ pronto e verificado · ⚠️ existe mas com ressalva · ❌ não f
 | 0.1 | Colocar o projeto em git e commitar o estado atual | ✅ 2026-09-18 |
 | 0.2 | **Resolver o OCR no Windows** (`HANDOFF.md` §5.1) | ✅ 2026-09-18 — era CRLF no parser do TSV |
 | 0.3 | Instalar `faster-whisper` e ligar a transcrição | ✅ 2026-09-28 — o caminho do Python estava errado (`HANDOFF.md` §5.2) |
-| 0.4 | Testar o GhostCLI contra a API real, não o mock | ✅ em uso contra `https://ghostcli.dev/v1`: ~670 chamadas registradas, 1 erro |
+| 0.4 | Testar o GhostCLI contra a API real, não o mock | ✅ em uso contra `https://ghostcli.dev/v1`: ~950 chamadas registradas |
+| 0.9 | Segundo provedor de IA com plano gratuito | ✅ 2026-09-30 — Google Gemini pelo mesmo cliente, com modelo reserva (HISTORICO §28, §32) |
 | 0.5 | Reanalisar o acervo depois da correção do OCR | ✅ os 98 vídeos têm análise visual pós-correção; 65 com CTA fixo detectado |
-| 0.7 | **Reanalisar os 93 vídeos que ficaram sem transcrição** | ❌ decisão do usuário — consome chamadas pagas do GhostCLI |
+| 0.7 | Reanalisar os 92 vídeos com transcrição falhada | ✅ encerrado 2026-09-29 — o usuário apagou esses vídeos; os 7 atuais têm fala |
+| 0.8 | Deixar a análise mais rápida (HISTORICO §27) | ✅ 2026-09-29 — transcrição na GPU (5×), beam 1, OCR junto com a fala, pista própria para "Gerar CTAs"; parte local na CPU 84,5 → 58,6 s |
 
-A Fase 0 está cumprida, com uma pendência: os 93 vídeos analisados enquanto o
-Python da transcrição estava errado tiveram os CTAs gerados sem ouvir o diálogo.
-Para corte de filme, é o diálogo que define o conflito — reanalisar esses vídeos
-é o maior ganho de qualidade disponível hoje na esteira de análise.
+A Fase 0 está cumprida, sem pendência: os vídeos que tinham CTAs gerados sem
+ouvir o diálogo foram apagados pelo usuário em 2026-09-29, e todo o acervo
+atual tem fala transcrita.
 
 ---
 
@@ -39,9 +40,11 @@ Era o escopo contratado. Está essencialmente completo.
 | Estados da fila (10 estados da spec) | ✅ | Indicador de atividade, sem percentual falso |
 | FFmpeg: metadados, miniatura, áudio, frames | ✅ | Seleção de instantes adaptada à duração |
 | Dedupe de frames quase idênticos | ✅ | Average hash 8×8 |
-| Transcrição (`faster-whisper`) | ⚠️ | Implementado, **desligado** por falta do pacote |
+| Transcrição (`faster-whisper`) | ✅ | Ligada desde 2026-09-28; na GPU desde 2026-09-29 (`FASTER_WHISPER_DEVICE=auto`, cai para a CPU sem CUDA) |
+| CTA a partir do enredo pela fala | ⚠️ | 2026-09-29: a geração lê a transcrição; sem chamada real conferida ainda (HISTORICO §24) |
 | OCR e classificação do texto | ✅ | Detecta o CTA fixo do vídeo; verificado em vídeo real |
-| Integração GhostCLI | ⚠️ | Implementada, testada só contra mock |
+| Integração GhostCLI | ✅ | Em uso contra a API real (item 0.4) |
+| Integração Google Gemini | ✅ | 2026-09-30: 38 chamadas ok, 9 reaproveitadas; análise e geração em ~3,5 s |
 | Validação da saída do modelo | ✅ | zod + regras editoriais + uma correção |
 | Geração de CTAs com distribuição por estilo | ✅ | A soma bate com a quantidade pedida |
 | Identificação de obra | ✅ | Só afirma com evidência; correção manual |
@@ -75,6 +78,9 @@ Era o escopo contratado. Está essencialmente completo.
 
 ## Fase 2 — Qualidade editorial
 
+**Adiada pelo usuário em 2026-09-29** ("não vou precisar dessas fases por
+enquanto"). Não comece sem ele pedir.
+
 Só faz sentido começar depois da Fase 0.
 
 | # | Item | Notas para quem for fazer |
@@ -94,7 +100,7 @@ Só faz sentido começar depois da Fase 0.
 | 3.1 | Trocar a fila por BullMQ + Redis | Só se o uso passar de uma máquina. As interfaces foram desenhadas para isso; o `runner.ts` não precisa mudar. |
 | 3.2 | Worker em processo separado | Já existe (`npm run worker` com `WORKER_IN_PROCESS=false`), falta usar de verdade e medir. |
 | 3.3 | Armazenamento de objetos | Hoje os vídeos ficam em `data/uploads/` no disco local. |
-| 3.4 | Métricas de custo e uso por lote | A página "Uso da IA" já mostra requisições, modelo, tempo e erros. Falta custo. |
+| 3.4 | Métricas de custo e uso por lote | A página "Uso da IA" já mostra requisições, provedor, modelo, tempo e erros. Falta custo. |
 | 3.5 | Comparação de CTAs escolhidos ao longo do tempo | Cada análise já grava a versão do prompt e o modelo — a base para comparar existe. |
 
 ---
@@ -113,9 +119,26 @@ vídeos têm origem identificada.
 
 ---
 
+---
+
+## Fase 4 — Publicação (acrescentada em 2026-09-30)
+
+Nasceu dos pedidos do usuário durante o uso, não do escopo original.
+
+| # | Item | Estado |
+| --- | --- | --- |
+| 4.1 | Página de Exportações com os vídeos prontos | ✅ feed vertical 9:16, dados com botão de copiar |
+| 4.2 | Pasta de saída configurável | ✅ validada com escrita real ao salvar |
+| 4.3 | Hashtags por IA (2 por vídeo, em lote) | ✅ conferido em 2 vídeos reais |
+| 4.4 | Legenda em japonês com hashtag fixa | ✅ conferido em 2 vídeos reais; ligável em Configurações |
+| 4.5 | Publicar direto na plataforma | ❌ não feito e não pedido. Exigiria API oficial e conta de negócios |
+
+---
+
 ## Perguntas em aberto para o usuário
 
-1. Reanalisar os 93 vídeos sem transcrição (item 0.7)? Custa chamadas pagas.
+1. ~~Reanalisar os 93 vídeos sem transcrição (item 0.7)?~~ Respondida em
+   2026-09-29: os vídeos foram apagados pelo usuário.
 2. Configurar o token do Facebook para captura do Instagram, ou seguir sem?
 3. Com OCR e transcrição funcionando: manter a geração de CTA apoiada neles, ou
    vale investir num provedor de visão (Fase 2.1)?

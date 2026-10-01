@@ -235,7 +235,8 @@ $('enviarShortCta').addEventListener('click', async () => {
 
    for (let i = 0; i < payload.comments.length; i += CHUNK) {
    const fatia = payload.comments.slice(i, i + CHUNK);
-   const chunkPayload = { ...payload, comments: fatia };
+   // append: do segundo pedaço em diante, soma aos já gravados em vez de substituir.
+   const chunkPayload = { ...payload, comments: fatia, append: i > 0 };
 
    // Usa o background script como proxy para evitar bloqueios de CORS do content script/popup
    const response = await chrome.runtime.sendMessage({

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 
 interface UsageRow {
+  provider: string | null;
   operation: string;
   model: string | null;
   status: string;
@@ -13,6 +14,7 @@ interface UsageRow {
 }
 
 interface ErrorRow {
+  provider: string | null;
   operation: string;
   model: string | null;
   error_code: string | null;
@@ -42,7 +44,10 @@ export default function UsagePanel() {
 
   if (!data) return <p className="hint">Carregando uso…</p>;
 
-  const totalRequests = data.usage.reduce((a, r) => a + r.total, 0);
+  // "cache" não é requisição: é a chamada que NÃO foi feita porque o resultado
+  // salvo servia. Somar as duas inflaria o gasto que a tela mostra.
+  const totalRequests = data.usage.filter((r) => r.status !== "cache").reduce((a, r) => a + r.total, 0);
+  const saved = data.usage.filter((r) => r.status === "cache").reduce((a, r) => a + r.total, 0);
   const failures = data.usage.filter((r: any) => r.status === "error").reduce((a, r) => a + r.total, 0);
 
   return (
@@ -57,8 +62,8 @@ export default function UsagePanel() {
       <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Stat label="Requisições" value={String(totalRequests)} />
         <Stat label="Com erro" value={String(failures)} tone={failures > 0 ? "warn" : undefined} />
+        <Stat label="Reaproveitadas (sem custo)" value={String(saved)} />
         <Stat label="Na fila" value={String(data.queue.queued)} />
-        <Stat label="Em execução" value={String(data.worker.active)} />
       </section>
 
       <section className="card overflow-x-auto p-4">
@@ -69,6 +74,7 @@ export default function UsagePanel() {
           <table className="w-full min-w-[540px] text-left text-sm">
             <thead className="text-xs uppercase tracking-wide text-ink-500">
               <tr>
+                <th className="pb-2">Provedor</th>
                 <th className="pb-2">Operação</th>
                 <th className="pb-2">Modelo</th>
                 <th className="pb-2">Status</th>
@@ -80,10 +86,13 @@ export default function UsagePanel() {
             <tbody>
               {data.usage.map((row, i) => (
                 <tr key={i} className="border-t border-ink-800">
+                  <td className="py-1.5 text-ink-400">{providerLabel(row.provider)}</td>
                   <td className="py-1.5">{row.operation}</td>
                   <td className="py-1.5 text-ink-400">{row.model ?? "—"}</td>
-                  <td className={`py-1.5 ${row.status === "error" ? "text-red-300" : "text-emerald-300"}`}>
-                    {row.status}
+                  <td
+                    className={`py-1.5 ${row.status === "error" ? "text-red-300" : row.status === "cache" ? "text-ink-400" : "text-emerald-300"}`}
+                  >
+                    {row.status === "cache" ? "reaproveitada" : row.status}
                   </td>
                   <td className="py-1.5 text-right">{row.total}</td>
                   <td className="py-1.5 text-right text-ink-400">
@@ -107,6 +116,7 @@ export default function UsagePanel() {
           <ul className="space-y-2 text-xs">
             {data.recentErrors.map((row, i) => (
               <li key={i} className="rounded-lg bg-ink-900/60 p-2">
+                <span className="text-ink-500">{providerLabel(row.provider)} · </span>
                 <span className="text-ink-300">{row.operation}</span>
                 <span className="ml-2 text-red-300">{row.error_code}</span>
                 <p className="mt-0.5 text-ink-400">{row.error_message}</p>
@@ -118,6 +128,12 @@ export default function UsagePanel() {
       </section>
     </div>
   );
+}
+
+/** Registros de antes do Gemini não têm provedor: eram todos do GhostCLI. */
+function providerLabel(provider: string | null): string {
+  if (provider === "gemini") return "Gemini";
+  return "GhostCLI";
 }
 
 function Stat({ label, value, tone }: { label: string; value: string; tone?: "warn" }) {

@@ -43,6 +43,14 @@ export const env = {
   ghostcliBaseUrl: str("GHOSTCLI_BASE_URL"),
   ghostcliAuthHeader: str("GHOSTCLI_AUTH_HEADER", "authorization").toLowerCase(),
 
+  // Google Gemini. A chave também pode ser salva pela tela de Configurações
+  // (criptografada no banco); a variável de ambiente, se existir, vence.
+  geminiApiKey: str("GEMINI_API_KEY"),
+  /** Endereço compatível com Chat Completions: o mesmo cliente do GhostCLI serve. */
+  geminiBaseUrl: str("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai"),
+  /** API nativa, usada só para listar os modelos da conta. */
+  geminiNativeUrl: str("GEMINI_NATIVE_URL", "https://generativelanguage.googleapis.com/v1beta"),
+
   ffmpegPath: str("FFMPEG_PATH", "ffmpeg"),
   ffprobePath: str("FFPROBE_PATH", "ffprobe"),
   tesseractPath: str("TESSERACT_PATH", "tesseract"),
@@ -54,6 +62,12 @@ export const env = {
     device: str("FASTER_WHISPER_DEVICE", "cpu"),
     computeType: str("FASTER_WHISPER_COMPUTE_TYPE", "int8"),
     language: str("FASTER_WHISPER_LANGUAGE", "pt"),
+    /**
+     * 1 = decodificação gulosa. Medido num corte real de 107 s (2026-09-29):
+     * ~40% mais rápido que 5, com 98% das palavras idênticas (a diferença foi
+     * pontuação). Suba para 5 se a fala do acervo for muito difícil.
+     */
+    beamSize: str("FASTER_WHISPER_BEAM", "1"),
   },
 
   visionProvider: str("VISION_PROVIDER", "tesseract"),
@@ -78,6 +92,6 @@ export function configWarnings(): string[] {
   const out: string[] = [];
   if (!env.appPassword) out.push("APP_PASSWORD nao definida: a aplicacao esta aberta a quem alcancar a porta.");
   if (!env.sessionSecret) out.push("APP_SESSION_SECRET nao definida: sessoes usam um segredo efemero e caem a cada reinicio.");
-  if (!env.masterKey) out.push("SECRETS_MASTER_KEY nao definida: a chave do GhostCLI so pode vir por variavel de ambiente, nao pela interface.");
+  if (!env.masterKey) out.push("SECRETS_MASTER_KEY nao definida: as chaves de IA (GhostCLI, Gemini) so podem vir por variavel de ambiente, nao pela interface.");
   return out;
 }

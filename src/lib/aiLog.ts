@@ -1,11 +1,14 @@
 import { db, newId, nowIso } from "./db";
 
 export interface AiLogEntry {
+  /** "ghostcli" | "gemini". Registros antigos, de antes do Gemini, ficam nulos. */
+  provider?: string | null;
   videoId?: string | null;
   jobId?: string | null;
   operation: string;
   model?: string | null;
-  status: "ok" | "error";
+  /** "cache": a chamada NÃO foi feita — o resultado salvo foi reaproveitado. */
+  status: "ok" | "error" | "cache";
   httpStatus?: number | null;
   durationMs?: number | null;
   attempt?: number;
@@ -25,13 +28,14 @@ export function logAiRequest(entry: AiLogEntry): void {
     db()
       .prepare(
         `INSERT INTO ai_request_logs
-         (id, video_id, job_id, operation, model, status, http_status, duration_ms, attempt,
+         (id, provider, video_id, job_id, operation, model, status, http_status, duration_ms, attempt,
           error_code, error_message, prompt_version, prompt_tokens, completion_tokens, created_at)
-         VALUES (@id, @videoId, @jobId, @operation, @model, @status, @httpStatus, @durationMs, @attempt,
+         VALUES (@id, @provider, @videoId, @jobId, @operation, @model, @status, @httpStatus, @durationMs, @attempt,
                  @errorCode, @errorMessage, @promptVersion, @promptTokens, @completionTokens, @createdAt)`,
       )
       .run({
         id: newId("log"),
+        provider: entry.provider ?? null,
         videoId: entry.videoId ?? null,
         jobId: entry.jobId ?? null,
         operation: entry.operation,

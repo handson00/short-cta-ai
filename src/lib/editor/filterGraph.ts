@@ -1,6 +1,7 @@
 import type { EditorTemplateConfig } from "../types";
 import { evenDown, evenUp, toPixels, type NormalizedRect } from "./crop";
 import { DEFAULT_AUDIO, placeVideoInSlot } from "./template";
+import { COLOR_EQ, DEFAULT_EFFECTS, LOUDNORM, outputDuration, zoomRect, type EditorEffects } from "./effects";
 
 /**
  * Monta o filter_complex do FFmpeg (spec §46-§48).
@@ -27,8 +28,16 @@ export interface ExportPlan {
   crop: NormalizedRect | null;
   sourceWidth: number;
   sourceHeight: number;
-  /** Duração do vídeo de origem: fecha a janela do texto e corta a música. */
+  /**
+   * Duração do vídeo de ORIGEM. A de saída (com corte e velocidade) é
+   * calculada aqui e é ela que fecha a janela do texto e corta a música.
+   */
   durationSeconds: number;
+  /**
+   * Efeitos do vídeo. O corte de início/fim NÃO entra no grafo: vira -ss/-t na
+   * entrada (export.ts), que já entrega ao grafo só o trecho escolhido.
+   */
+  effects?: EditorEffects | null;
   sourceHasAudio: boolean;
   /** Matriz de cor declarada na origem (`probe().colorSpace`); nula = não declarada. */
   sourceColorSpace: string | null;
@@ -98,7 +107,11 @@ export function buildFilterGraph(plan: ExportPlan): FilterGraph {
   const canvasW = even(t.canvasWidth);
   const canvasH = even(t.canvasHeight);
 
-  const src = toPixels(plan.crop ?? { x: 0, y: 0, width: 1, height: 1 }, plan.sourceWidth, plan.sourceHeight);
+  const fx = plan.effects ?? DEFAULT_EFFECTS;
+  // Duração do arquivo que sai: é nela que o texto e a música são medidos.
+  const outDur = outputDuration(plan.durationSeconds, fx);
+  // Zoom = recorte menor em volta do centro; o preview faz a mesma conta.
+  const src = toPixels(zoomRect(plan.crop, fx.zoom), plan.sourceWidth, plan.sourceHeight);
   const placement = placeVideoInSlot(src.width / src.height, t);
 
   // Em FILL o vídeo estoura o slot; recorta-se o que passa, e a sobra some.
@@ -125,10 +138,15 @@ export function buildFilterGraph(plan: ExportPlan): FilterGraph {
     `[0:v]${[
       ...sourceTag,
       `crop=${src.width}:${src.height}:${src.x}:${src.y}`,
+      // Espelho depois do recorte: inverte a região escolhida, não o quadro inteiro.
+      ...(fx.mirror ? ["hflip"] : []),
+      ...(fx.enhanceColor ? [`eq=contrast=${COLOR_EQ.contrast}:saturation=${COLOR_EQ.saturation}`] : []),
       `scale=${even(placement.width)}:${even(placement.height)}:${TO_709}`,
       `crop=${visibleW}:${visibleH}:${visibleX}:${visibleY}`,
       "format=yuv420p",
       TAG_709,
+      // Velocidade: o vídeo encurta; o áudio acompanha com atempo, abaixo.
+      ...(fx.speed !== 1 ? [`setpts=PTS/${num(fx.speed)}`] : []),
     ].join(",")}[vid]`,
   );
 
@@ -174,7 +192,7 @@ export function buildFilterGraph(plan: ExportPlan): FilterGraph {
   if (plan.hasTextLayer && t.text?.enabled) {
     inputs.push("text");
     const tx = t.text;
-    const end = tx.end ?? plan.durationSeconds;
+    const end = tx.end ?? outDur;
     // A camada já vem no tamanho da caixa; o scale só protege contra uma
     // camada desenhada antes de a caixa mudar de tamanho. yuva420p guarda o
     // alfa em resolução cheia, e é nele que os fades trabalham.
@@ -205,21 +223,27 @@ export function buildFilterGraph(plan: ExportPlan): FilterGraph {
   const withMusic = (audio.mode === "replace" || audio.mode === "mix") && Boolean(audio.music);
   if (withMusic) inputs.push("music");
   // A música entra em loop; o corte pela duração do vídeo é o que a faz parar.
-  const musicTrim = plan.durationSeconds > 0 ? `,atrim=duration=${num(plan.durationSeconds)},asetpts=N/SR/TB` : "";
+  const musicTrim = outDur > 0 ? `,atrim=duration=${num(outDur)},asetpts=N/SR/TB` : "";
+  // O áudio original acompanha a velocidade sem mudar o tom (atempo); a
+  // música não: ela é cortada na duração final, não acelerada.
+  const tempo = fx.speed !== 1 ? `atempo=${num(fx.speed)},` : "";
+  // "Melhorar áudio" vale para o que sai, depois da mistura: corte de ronco
+  // abaixo de 80 Hz e volume padronizado em -14 LUFS.
+  const tail = fx.enhanceAudio ? `highpass=f=80,${LOUDNORM},aresample=48000` : "aresample=48000";
 
   if (audio.mode === "original" && plan.sourceHasAudio) {
-    steps.push(`[0:a]volume=${num(audio.originalVolume)},aresample=48000[aout]`);
+    steps.push(`[0:a]${tempo}volume=${num(audio.originalVolume)},${tail}[aout]`);
     audioLabel = "aout";
   } else if (withMusic && (audio.mode === "replace" || !plan.sourceHasAudio)) {
     // Misturar num vídeo sem áudio é o mesmo que substituir.
-    steps.push(`[${indexOf("music")}:a]volume=${num(audio.musicVolume)}${musicTrim},aresample=48000[aout]`);
+    steps.push(`[${indexOf("music")}:a]volume=${num(audio.musicVolume)}${musicTrim},${tail}[aout]`);
     audioLabel = "aout";
   } else if (withMusic && audio.mode === "mix") {
     // normalize=0: sem ele o amix divide cada entrada pelo número de entradas
     // e o volume configurado não seria o que sai.
-    steps.push(`[0:a]volume=${num(audio.originalVolume)}[a0]`);
+    steps.push(`[0:a]${tempo}volume=${num(audio.originalVolume)}[a0]`);
     steps.push(`[${indexOf("music")}:a]volume=${num(audio.musicVolume)}${musicTrim}[a1]`);
-    steps.push(`[a0][a1]amix=inputs=2:duration=first:normalize=0,aresample=48000[aout]`);
+    steps.push(`[a0][a1]amix=inputs=2:duration=first:normalize=0,${tail}[aout]`);
     audioLabel = "aout";
   }
   // "mute", ou "original" num vídeo sem áudio: o arquivo sai sem trilha.

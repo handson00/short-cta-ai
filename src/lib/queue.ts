@@ -25,18 +25,30 @@ const RECOVERY_SWEEP_MS = 20_000;
 
 const OWNER = `${os.hostname()}:${process.pid}`;
 
-export function claimNextJob(): ClaimedJob | null {
+/**
+ * Duas pistas. "local" = jobs que transcrevem (importação, "Analisar
+ * novamente"): pesam na CPU e respeitam a concorrência configurada. "ai" =
+ * "Gerar CTAs" com a parte local já pronta: passam o tempo esperando a rede, e
+ * enfileirá-los atrás de transcrições deixaria a IA parada à toa. Um job "ai"
+ * de vídeo que nunca foi processado faz a parte local na pista dele — é raro e
+ * não justifica trocar de pista no meio.
+ */
+export type QueueLane = "local" | "ai";
+
+export function claimNextJob(lane?: QueueLane): ClaimedJob | null {
   const database = db();
+  const laneFilter =
+    lane === "ai" ? "AND mode = 'ai'" : lane === "local" ? "AND COALESCE(mode, 'full') <> 'ai'" : "";
   const claim = database.transaction((): ClaimedJob | null => {
     const row = database
       .prepare(
-        `SELECT id, video_id, attempts, max_attempts, reuse_scene FROM analysis_jobs
+        `SELECT id, video_id, attempts, max_attempts, reuse_scene, mode FROM analysis_jobs
          WHERE status = 'queued' AND cancel_requested = 0
-           AND (lease_expires_at IS NULL OR lease_expires_at < ?)
+           AND (lease_expires_at IS NULL OR lease_expires_at < ?) ${laneFilter}
          ORDER BY created_at LIMIT 1`,
       )
       .get(nowIso()) as
-      | { id: string; video_id: string; attempts: number; max_attempts: number; reuse_scene: number }
+      | { id: string; video_id: string; attempts: number; max_attempts: number; reuse_scene: number; mode: string | null }
       | undefined;
     if (!row) return null;
 
@@ -54,6 +66,7 @@ export function claimNextJob(): ClaimedJob | null {
       attempts: row.attempts + 1,
       maxAttempts: row.max_attempts,
       reuseScene: toBool(row.reuse_scene),
+      mode: row.mode === "local" || row.mode === "ai" ? row.mode : "full",
     };
   });
 
@@ -106,8 +119,11 @@ export function recoverStaleJobs(): { requeued: number; failed: number } {
 export function queueCounts(): Record<string, number> {
   const rows = db()
     .prepare(
+      // Um job por vídeo — o mais recente, com o mesmo desempate por rowid de
+      // `repo.latestJob`; por MAX(created_at), um empate contava o vídeo duas vezes.
       `SELECT status, COUNT(*) AS total FROM analysis_jobs j
-       WHERE j.created_at = (SELECT MAX(created_at) FROM analysis_jobs WHERE video_id = j.video_id)
+       WHERE j.rowid = (SELECT j2.rowid FROM analysis_jobs j2 WHERE j2.video_id = j.video_id
+                        ORDER BY j2.created_at DESC, j2.rowid DESC LIMIT 1)
        GROUP BY status`,
     )
     .all() as { status: string; total: number }[];
@@ -133,7 +149,21 @@ export function cancelQueuedAndActiveJobs(): { canceled: number } {
 let started = false;
 let stopping = false;
 let timer: NodeJS.Timeout | null = null;
-const running = new Map<string, NodeJS.Timeout>();
+const running = new Map<string, { beat: NodeJS.Timeout; lane: QueueLane }>();
+
+function laneCount(lane: QueueLane): number {
+  let n = 0;
+  for (const r of running.values()) if (r.lane === lane) n += 1;
+  return n;
+}
+
+function fill(lane: QueueLane, limit: number): void {
+  while (laneCount(lane) < limit) {
+    const job = claimNextJob(lane);
+    if (!job) break;
+    void execute(job, lane);
+  }
+}
 
 export function startWorker(): void {
   if (started) return;
@@ -160,12 +190,13 @@ export function startWorker(): void {
         }
       }
 
-      const concurrency = getSettings().queue.concurrency;
-      while (running.size < concurrency) {
-        const job = claimNextJob();
-        if (!job) break;
-        void execute(job);
-      }
+      const settings = getSettings();
+      const { concurrency, aiConcurrency } = settings.queue;
+      fill("local", concurrency);
+      // O plano gratuito do Gemini tem limite baixo de requisições por minuto:
+      // um vídeo por vez faz as chamadas saírem em fila, em vez de três jobs
+      // baterem no limite juntos e queimarem as tentativas.
+      fill("ai", settings.ai.provider === "gemini" ? 1 : aiConcurrency);
     } catch (err) {
       console.error("[fila] falha no laco principal:", (err as Error).message);
     }
@@ -179,14 +210,14 @@ export function startWorker(): void {
 export function stopWorker(): void {
   stopping = true;
   if (timer) clearTimeout(timer);
-  for (const beat of running.values()) clearInterval(beat);
+  for (const { beat } of running.values()) clearInterval(beat);
   running.clear();
   started = false;
 }
 
-async function execute(job: ClaimedJob): Promise<void> {
+async function execute(job: ClaimedJob, lane: QueueLane): Promise<void> {
   const beat = setInterval(() => heartbeat(job.id), HEARTBEAT_MS);
-  running.set(job.id, beat);
+  running.set(job.id, { beat, lane });
   try {
     await runJob(job);
   } catch (err) {

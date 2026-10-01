@@ -42,7 +42,23 @@ function seconds(a: string | null, b: string | null): number | null {
   return Number.isFinite(s) && s >= 0 ? s : null;
 }
 
-export default function ExportQueuePanel({ refreshKey }: { refreshKey: number }) {
+/** Resumo do lote, para a barra de ações mostrar o andamento sem duplicar a conta. */
+export interface ExportSummary {
+  total: number;
+  done: number;
+  failed: number;
+  overall: number;
+  busy: boolean;
+}
+
+export default function ExportQueuePanel({
+  refreshKey,
+  onSummary,
+}: {
+  refreshKey: number;
+  /** O andamento a cada consulta; nulo quando não há nada na fila. */
+  onSummary?: (summary: ExportSummary | null) => void;
+}) {
   const [jobs, setJobs] = useState<JobView[]>([]);
   const [queue, setQueue] = useState<QueueInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -83,8 +99,6 @@ export default function ExportQueuePanel({ refreshKey }: { refreshKey: number })
     await load();
   }
 
-  if (jobs.length === 0 && !error) return null;
-
   // Totais do lote: o que interessa é "12 de 30", não uma lista de 30 barras.
   const total = jobs.length;
   const done = jobs.filter((j) => j.status === "completed").length;
@@ -109,8 +123,16 @@ export default function ExportQueuePanel({ refreshKey }: { refreshKey: number })
       ? Math.ceil(((pending + running.length) * avg) / queue.concurrency / 60)
       : null;
 
+  // A barra de ações mostra o mesmo andamento sem refazer a conta. Vai num
+  // efeito, e não no meio do render, para não atualizar o pai durante o render.
+  useEffect(() => {
+    onSummary?.(total === 0 ? null : { total, done, failed, overall, busy });
+  }, [onSummary, total, done, failed, overall, busy]);
+
+  if (jobs.length === 0 && !error) return null;
+
   return (
-    <section className="space-y-3 rounded-xl border border-ink-800 bg-ink-900/50 p-4">
+    <section id="fila-de-exportacao" className="space-y-3 rounded-xl border border-ink-800 bg-ink-900/50 p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h2 className="text-sm font-semibold uppercase tracking-wider text-ink-400">Exportação</h2>

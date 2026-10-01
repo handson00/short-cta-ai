@@ -473,6 +473,8 @@
           comments: fatia,
           // Envia hashtags apenas no primeiro chunk para evitar duplicação
           hashtags: i === 0 ? hashtags : { doVideo: [], nosComentarios: [], todas: [] },
+          // Do segundo pedaço em diante soma aos já gravados em vez de substituir.
+          append: i > 0,
         };
 
         // Delega o fetch ao background service worker para evitar bloqueios de CORS/permissões do content script

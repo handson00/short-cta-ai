@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { isAuthenticated } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { originKeyOf, originLabel } from "@/lib/editor/profile";
+import type { CtaOption } from "@/lib/editor/ctaOptions";
 
 export const dynamic = "force-dynamic";
 
@@ -25,6 +27,11 @@ interface LibraryVideo {
   hasAnalysis: boolean;
   status: string;
   templateId: string | null;
+  /** Página de origem (`tiktok:usuario`), base do perfil de origem; nula = não identificada. */
+  originKey: string | null;
+  originLabel: string | null;
+  /** Os CTAs gerados para o vídeo, recomendado primeiro — para trocar o texto no editor. */
+  ctaOptions: CtaOption[];
 }
 
 /**
@@ -56,6 +63,9 @@ export async function GET() {
          v.height,
          v.aspect_ratio,
          v.duration_seconds,
+         v.platform,
+         v.tiktok_username,
+         v.source_folder,
          (SELECT us.edited_text FROM user_selections us WHERE us.video_id = v.id LIMIT 1) AS edited_text,
          (SELECT cs.text FROM user_selections us JOIN cta_suggestions cs ON cs.id = us.chosen_cta_id
             WHERE us.video_id = v.id LIMIT 1) AS chosen_cta,
@@ -82,6 +92,9 @@ export async function GET() {
     height: number | null;
     aspect_ratio: string | null;
     duration_seconds: number | null;
+    platform: string | null;
+    tiktok_username: string | null;
+    source_folder: string | null;
     edited_text: string | null;
     chosen_cta: string | null;
     recommended_cta: string | null;
@@ -93,6 +106,31 @@ export async function GET() {
     template_id: string | null;
   }>;
 
+  // Todas as sugestões dos vídeos da edição numa consulta só, e não uma por
+  // vídeo: com 98 vídeos seriam 98 consultas a cada carga da tela.
+  const suggestionRows = db()
+    .prepare(
+      `SELECT cs.video_id, cs.text, cs.style, cs.origin, cs.is_recommended
+       FROM cta_suggestions cs
+       JOIN editor_videos ev ON ev.video_id = cs.video_id
+       ORDER BY cs.video_id, cs.is_recommended DESC, cs.position`,
+    )
+    .all() as Array<{ video_id: string; text: string; style: string; origin: string; is_recommended: number }>;
+  const optionsByVideo = new Map<string, CtaOption[]>();
+  for (const s of suggestionRows) {
+    const list = optionsByVideo.get(s.video_id) ?? [];
+    // O mesmo texto em duas origens (gerado e já no vídeo) seria o mesmo clique
+    // duas vezes: fica um só. Mas "já estava no vídeo" não pode se perder na
+    // fusão — a tela o pinta de verde para o usuário reconhecer o CTA original.
+    const twin = list.find((o) => o.text.trim() === s.text.trim());
+    if (twin) {
+      if (s.origin === "original") twin.origin = "original";
+    } else {
+      list.push({ text: s.text, style: s.style, origin: s.origin, recommended: Boolean(s.is_recommended) });
+    }
+    optionsByVideo.set(s.video_id, list);
+  }
+
   const videos: LibraryVideo[] = rows.map((r) => {
     const [ctaText, ctaSource]: [string | null, CtaSource] = r.edited_text
       ? [r.edited_text, "editado"]
@@ -101,6 +139,11 @@ export async function GET() {
         : r.recommended_cta
           ? [r.recommended_cta, "recomendado"]
           : [null, null];
+    const originKey = originKeyOf({
+      platform: r.platform,
+      username: r.tiktok_username,
+      sourceFolder: r.source_folder,
+    });
     return {
       id: r.id,
       originalName: r.original_name,
@@ -118,6 +161,9 @@ export async function GET() {
       hasAnalysis: Boolean(r.has_analysis),
       status: r.job_status ?? "queued",
       templateId: r.template_id,
+      originKey,
+      originLabel: originLabel(originKey),
+      ctaOptions: optionsByVideo.get(r.id) ?? [],
     };
   });
 

@@ -1692,3 +1692,763 @@ Três cuidados que não são óbvios:
 
 Typecheck, 304/304 testes e build limpos. O comportamento na tela não foi
 verificado.
+
+## 23. Editor — Fase 9 (perfis de origem) (2026-09-29)
+
+Aceite da §104: um lote de vídeos da mesma página reutiliza o recorte.
+
+Antes de desenhar, o banco: os 98 vídeos são todos de `@helmermovies`, em três
+resoluções (720×1280, 576×1024, 1080×1920), todas 9:16. A página já era
+conhecida pelo nome do arquivo; o que faltava ao perfil era a proporção — um
+recorte normalizado só aponta para a mesma região em vídeos de mesma proporção.
+
+O perfil guarda o recorte, a página (`tiktok:helmermovies`) e a proporção do
+vídeo em que foi desenhado. Um perfil serve a um vídeo quando página e
+proporção batem; a regra (`matchProfile`) é a mesma na tela e no servidor.
+Detalhes e arquivos em `video-editor/IMPLEMENTATION_PLAN.md`.
+
+Decisões:
+
+- **Recorte manual nunca é trocado em lote**; proporção diferente fica de fora
+  com o motivo. Um lote que apagasse ajuste manual, ou cortasse um vídeo 1:1
+  com um retângulo desenhado em 9:16, faria o erro aparecer só na exportação.
+- **O perfil vence a detecção automática** (ordem da §90) — moldura animada
+  engana o Smart Crop, e é para isso que o perfil existe —, mas vídeos cuja
+  detecção diverge do perfil (IoU < 0,85) são listados para revisão. O limite
+  saiu do acervo: detecções da mesma página se sobrepõem com IoU ~0,96.
+- **Recorte aplicado é cópia.** Atualizar o perfil não muda quem já o recebeu,
+  e a tela diz isso; excluir mantém o recorte e só desfaz o vínculo
+  (explicitamente: `profile_id` entrou por ALTER TABLE, sem FK).
+
+Verificado: typecheck; 345/345 testes (26 novos, com banco temporário); a
+migração numa cópia do banco real feita pela API de backup do SQLite (colunas
+criadas, 5 recortes preservados, `foreign_key_check` limpo).
+
+**Não verificado:** `npm run build` (o servidor do usuário estava rodando na
+porta 3000, e o build reescreveria a `.next` debaixo dele), as rotas com o app
+rodando e o painel na tela.
+
+## 24. CTA a partir do enredo que a fala revela (2026-09-29)
+
+Pedido do usuário: as sugestões de CTA devem nascer da transcrição — entender o
+enredo pela fala e gerar ganchos mais fortes.
+
+### O que estava errado
+
+A transcrição ia só para a **análise**. A **geração** dos CTAs recebia apenas o
+resumo de três frases que o modelo escreveu (`buildGenerationUserMessage`):
+quem escrevia o gancho nunca lia uma fala.
+
+### O que mudou
+
+1. **Análise:** o contrato ganhou `plot` (o enredo reconstruído pelas falas:
+   quem, o que quer, o que está em jogo, o que muda) e `keyLines` (2 a 5 falas
+   literais, com o instante). O prompt declara a fala como evidência principal
+   da história.
+2. **Geração:** recebe enredo, falas-chave e a transcrição completa (até 6.000
+   caracteres, com o corte declarado), antes do resumo e dentro de
+   `untrusted()`. O prompt manda cada gancho partir de um elemento concreto do
+   enredo, preferir o que os personagens dizem ao que a imagem sugere, nunca
+   atribuir a alguém o que não está na transcrição, e dizer no `reason` em que
+   fala se apoia. "Regenerar CTAs" também lê a transcrição atual.
+3. **Tela:** o painel da Fila mostra "Enredo (pela fala)" com as falas-chave, e
+   um aviso de em que os CTAs se apoiaram — fala, sem fala, versão antiga ou
+   **transcrição falhou, com o motivo**.
+
+`PROMPT_VERSION` passou a `2026-09-29-enredo-fala`.
+
+### Decisões que não são óbvias
+
+- **Fala-chave é conferida na transcrição** (`groundKeyLines`): ≥ 70% das
+  palavras precisam estar lá, sem acento nem pontuação. Uma fala inventada
+  pelo modelo apareceria na tela com cara de citação e entraria no CTA como
+  evidência.
+- **Sem fala recebida, o enredo é descartado** mesmo que o modelo o escreva, e
+  `evidenceBasis` é calculado pelo servidor, não declarado pelo modelo.
+- **Falha de transcrição é dita como falha** no prompt ("pode haver fala que
+  não foi ouvida: não afirme que ninguém fala") e na tela, em vermelho. É o
+  mesmo defeito do §11: 95 vídeos analisados surdos com o painel dizendo "sem
+  fala compreensível".
+
+### Estado do acervo — o que limita o ganho hoje
+
+Consulta ao banco em 2026-09-29: **6 vídeos têm fala transcrita; 92 têm
+gravada a falha antiga** ("faster-whisper não está instalado", da época do
+caminho errado do Python). O `npm run doctor` confirma que a transcrição
+funciona agora. A mudança só atua nesses 92 depois de "Analisar novamente",
+que transcreve de novo (CPU local) e faz 2 chamadas pagas ao GhostCLI por
+vídeo. Decisão do usuário.
+
+Montada pelo caminho real num dos 6 vídeos com fala (cópia do banco), a
+mensagem da geração passou a levar a narração inteira do corte, instante a
+instante; antes levava três frases.
+
+Verificado: typecheck; 345/345 testes (15 novos em `tests/enredoFala.test.ts`).
+**Não verificado:** nenhuma chamada real ao modelo com o prompt novo — a
+qualidade dos ganchos gerados ainda não foi vista —, o build e o painel na tela.
+
+## 25. "Analisar novamente" em lote na Fila (2026-09-29)
+
+Pedido do usuário: um botão na página principal para reanalisar os vídeos
+selecionados antes de mandá-los para a edição.
+
+Na barra de seleção da Fila: **"Analisar novamente (N)"**, e o atalho
+**"Selecionar transcrição falhada (N)"**, que marca, dentro do filtro atual,
+os vídeos cujos CTAs foram escritos sem ouvir a fala (§24). A confirmação diz
+o custo (2 chamadas pagas por vídeo) e que o CTA **escolhido** na Fila é
+desfeito, porque as sugestões são refeitas; o texto **editado** fica.
+
+Rota nova `POST /api/videos/bulk-reanalyze`; a regra está em
+`repo.requestReanalysis`, usada também pela rota individual.
+
+**Um defeito antigo corrigido de passagem:** a rota individual criava um job
+novo mesmo com o vídeo já em análise, e os dois jobs rodavam juntos sobre os
+mesmos arquivos. Agora o vídeo com job aberto é pulado, com o motivo (409 na
+rota individual).
+
+**E um que o teste pegou:** a primeira versão da checagem usava `latestJob`,
+que ordena por `created_at`. Dois jobs criados no mesmo milissegundo empatam,
+e o empate às vezes devolvia o job antigo — o teste do duplo clique falhava em
+2 de 4 rodadas. A checagem virou "existe job aberto para o vídeo?". Depois da
+correção, 5 de 5. `latestJobsByVideo` tem o mesmo empate teórico no status
+mostrado na tela; na prática não ocorre (um job novo nasce muito depois do
+anterior terminar) e não foi mexido.
+
+Verificado: typecheck, 350/350 testes (5 novos em `tests/reanalysis.test.ts`),
+build, e a rota no app rodando só com chamadas sem custo (sem sessão → 401,
+lista vazia → 400, vídeo inexistente → relatado). Contagem nesse momento: 7
+vídeos com fala, 91 com transcrição falhada.
+
+**Não verificado:** o botão clicado na tela e uma reanálise real disparada por
+ele — isso consome chamadas pagas e fica para o usuário.
+
+## 26. Economia de chamadas pagas: IA sob demanda, reaproveitamento e hashtags sem IA (2026-09-29)
+
+Pedido do usuário: economizar nas chamadas à IA; hashtags só as capturadas
+pela extensão — as 2 mais relevantes —; e o CTA principal sempre vindo da fala
+e de curiosidade.
+
+### O que mudou
+
+1. **A importação não chama mais a IA.** Faz só a parte local (transcrição,
+   frames, OCR) e o vídeo fica "Aguardando CTA". Na Fila, **"Gerar CTAs (N)"**
+   roda a IA só nos selecionados (job `mode = 'ai'`, que pula a parte local já
+   feita). Configuração "Gerar CTAs automaticamente ao importar" (desligada)
+   devolve o comportamento antigo. "Tentar novamente" repete o modo do job que
+   falhou, para um vídeo importado não passar a gastar sem pedido.
+2. **Mesma entrada, nenhuma chamada.** `pipeline/aiCache.ts` calcula o SHA-256
+   do texto exato que iria ao modelo, com as mesmas funções que montam o
+   prompt. Igual ao da análise/geração salva, o resultado é reaproveitado e
+   registrado em "Uso da IA" como **reaproveitada** — fora do total de
+   requisições. Reaproveitar a geração também preserva o CTA escolhido na Fila.
+   "Regenerar CTAs" é pedido explícito e sempre chama.
+3. **Hashtags sem IA** (`pipeline/hashtagRank.ts`): as 2 mais relevantes entre
+   as capturadas — no post original (+3), citada nos comentários (+vezes, teto
+   5), fala do mesmo que o CTA (+5) ou aparece na fala (+3); genéricas (#fyp,
+   #viral…) nunca entram; cada uma sai com o motivo. A rota
+   `hashtags-virais`, o método do provedor e os dois prompts foram removidos —
+   e com eles o registro dobrado que inflava "Uso da IA".
+4. **CTA principal = curiosidade apoiada na fala.** O prompt pede; o validador
+   garante: se a recomendação não é de curiosidade ou não tem palavra de
+   conteúdo em comum com a fala (sem palavras comuns — `speechAnchor`), promove
+   a curiosidade mais ancorada na transcrição.
+
+### Decisões que não são óbvias
+
+- **"Gerar CTAs" com transcrição FALHADA refaz a parte local antes.** Senão
+  pagaria a IA para escrever sem ouvir a fala — o problema do §24.
+- **Limite honesto das hashtags:** a extensão não mede visualização por
+  hashtag (o TikTok não informa). "No post original" é o sinal mais próximo de
+  "deu visualização", e a tela diz isso. No acervo atual as três capturadas são
+  quase sempre as mesmas (#filme/#filmes, #cenasdefilme, #resumodefilmes) e os
+  comentários não trazem hashtag: as 2 recomendadas empatam e saem pela ordem
+  do post. O ranking só diferencia vídeos quando houver hashtag nos comentários
+  ou ligada ao CTA.
+
+### Dois defeitos corrigidos no caminho
+
+- **Envio em pedaços da extensão.** Cada pedaço de 200 comentários substituía
+  o anterior, e os pedaços 2+ chegavam com hashtags vazias que apagavam as do
+  primeiro. Agora o servidor aceita `append` (a extensão 1.1.1 manda do
+  segundo pedaço em diante) e nunca grava hashtag vazia por cima. No banco:
+  nenhum vídeo passou de 197 comentários, então o defeito ainda não tinha
+  apagado nada. 29 dos 95 vídeos têm hashtags vazias — não por este defeito
+  (só age no 2º pedaço); a causa não foi determinada.
+- **`video_hashtags` criada "na hora".** Ia para o schema: a leitura dava 500
+  num banco que nunca recebeu hashtag (e a spec §138 proíbe tabela ad hoc).
+
+### Verificado
+
+Typecheck, build, 373/373 testes (23 novos em `iaSobDemanda.test.ts` e
+`runnerModes.test.ts`: modos, reaproveitamento, hashtags, CTA principal,
+pedaços). No app rodando, sem chamada paga: configuração desligada por padrão,
+hashtags recomendadas em vídeos reais, rota antiga 404, modo inválido 422,
+migração no banco real (216 jobs antigos como `full`).
+
+**Não verificado:** uma importação real (só parte local) e um "Gerar CTAs" real
+— consomem chamada paga ou arquivo novo; os botões na tela; a extensão 1.1.1
+num navegador (precisa ser recarregada em `chrome://extensions`).
+
+## 27. Análise de vídeo mais rápida (2026-09-29)
+
+Pedido do usuário: deixar o processo de análise mais rápido. Primeiro medido,
+depois mexido.
+
+### Onde o tempo ia (medido)
+
+- Banco real: job completo levava **60 s em média**; a IA, ~22 s (análise
+  ~11 s + geração ~11 s, uma depois da outra — a geração lê a análise).
+- Parte local num corte de 107 s: probe 0,0 s · thumbnail 0,1 s · frames 2,1 s
+  · áudio 0,1 s · **transcrição 52 s** · OCR 4,4 s. A transcrição é quase tudo.
+- Variantes do faster-whisper no mesmo áudio: mais threads de CPU quase não
+  mudam (75,7 → 71,7 s); **beam 5 → 1** corta ~40% (71,7 → 43,3 s) com 98% das
+  palavras iguais (a diferença foi pontuação; o beam 1 acertou "montanhas" onde
+  o 5 escreveu "utanhas"). A máquina tem uma RTX 4050 que não era usada: faltava
+  o cuBLAS/cuDNN no Python.
+
+### O que mudou
+
+1. **Beam 1 por padrão** (`FASTER_WHISPER_BEAM`, volta para 5 se precisar).
+2. **Fala e texto na tela ao mesmo tempo** (`runner.transcribeAndReadText`): o
+   OCR não depende do áudio, então some dentro do tempo da transcrição. A etapa
+   mostrada é a que falta ("Lendo texto" só se o OCR passar da fala). Espera os
+   dois mesmo se um falhar — nada fica gravando depois do job encerrado.
+3. **Frames e OCR em paralelo** (`lib/concurrency.mapLimit`, 4 ffmpegs / 3
+   Tesseracts por vídeo). O descarte de frames repetidos continua na ordem do
+   vídeo e o OCR é juntado na ordem original: resultado idêntico (conferido —
+   mesmos frames).
+4. **Duas pistas na fila** (`queue.ts`): "Gerar CTAs" (job `ai`, só rede) não
+   espera atrás de transcrição. Configuração nova "Gerando CTAs em paralelo"
+   (padrão 3; o histórico não tem nenhum 429 do GhostCLI com 2).
+5. **GPU opcional** (`FASTER_WHISPER_DEVICE=auto`): o script tenta CUDA/float16
+   e, se as bibliotecas não estiverem lá, transcreve na CPU. No Windows ele
+   registra as pastas `site-packages/nvidia/*/bin`, onde o pip põe as DLLs.
+6. **Saída do transcritor sempre UTF-8.** Redirecionada para arquivo, o Python
+   do Windows escrevia em cp1252. As transcrições salvas estavam íntegras
+   (nenhum U+FFFD nas 6 do banco), mas não dependia disso.
+
+### Números (vídeo real, mesma sessão)
+
+- Parte local na CPU: **84,5 s → 58,6 s (−31%)**, mesmos 44 trechos de fala,
+  mesmos frames.
+- Transcrição na GPU (bibliotecas CUDA numa pasta isolada, sem tocar no Python
+  do usuário): **10,4–10,8 s contra 53 s na CPU (5×)**, 474/474 palavras,
+  99,6% idênticas (uma vírgula virou ponto).
+- `auto` sem as bibliotecas: caiu para a CPU e transcreveu (59,6 s — ~6 s a
+  mais pela tentativa na GPU). **Não ligar `auto` sem instalar as bibliotecas.**
+
+### Um vazamento de teste corrigido
+
+`runnerModes.test.ts` não isolava `DATA_DIR` e criou `data/artifacts/v1`
+(vazia) nos dados reais. Removida; o teste agora usa pasta temporária.
+
+### Verificado
+
+Typecheck e 380/380 testes (novos: pistas da fila, `mapLimit`, OCR começando
+durante a transcrição, etapa mostrada).
+
+**GPU ligada (a pedido do usuário):** `nvidia-cublas-cu12` 12.9.2.10,
+`nvidia-cudnn-cu12` 9.26.0.51 e `nvidia-cuda-nvrtc-cu12` 12.9.86 instalados no
+Python do `.env.local`, que passou a `FASTER_WHISPER_DEVICE=auto`. Pelo
+provedor do app: 14,3 s na primeira rodada (inclui iniciar a GPU), 43 trechos,
+acentos íntegros. Build e servidor reiniciados.
+
+**Não verificado:** um job real importado pela tela com tudo isso junto.
+
+### Fato do ambiente, fora desta entrega
+
+Às 15:53:54 (horário local), 92 vídeos saíram do banco com arquivos e artefatos.
+Sobraram 6, de 2026-09-25. Só as rotas de exclusão da tela apagam linhas de
+`videos`. Os comandos desta sessão só leram o banco. O usuário confirmou que
+a exclusão foi dele, pela tela.
+
+## 28. Google Gemini como segundo provedor de IA (2026-09-30)
+
+Pedido do usuário: usar os modelos gratuitos do Google, escolhendo tudo em
+Configurações, com a lista de modelos para escolher.
+
+### Decisão: adaptar, não escrever outro provedor
+
+O Google oferece um endpoint compatível com Chat Completions
+(`https://generativelanguage.googleapis.com/v1beta/openai`, chave como
+Bearer) — o mesmo formato que o cliente do GhostCLI já fala. Por isso o
+provedor virou um só (`ChatCompletionsProvider`, em `providers/ai/ghostcli.ts`)
+configurado por um **perfil** (`resolveAiProfile` em `settings.ts`): endereço,
+chave, modelos, timeout. Prompts, validação, reparo, reaproveitamento por hash
+e registro de uso são os mesmos para os dois provedores.
+
+### O que mudou
+
+- **Configurações → IA:** escolha do provedor no topo; para o Gemini, chave
+  (salva criptografada, como a do GhostCLI, ou `GEMINI_API_KEY`), modelo de
+  análise e de geração num `<select>`, "Atualizar lista" e "Testar conexão".
+- **Lista de modelos** (`/api/settings/models`, `providers/ai/geminiModels.ts`):
+  vem da conta pela API nativa `models.list` (chave no cabeçalho
+  `x-goog-api-key`, nunca na URL). Ficam só modelos de texto (sem imagem, voz,
+  ao vivo, embeddings). A marca "gratuito" vem da página de preços do Google,
+  copiada com a data (a API não informa isso). Se a consulta falhar, a tela
+  mostra o motivo e oferece os gratuitos conhecidos.
+- **Uma chave por provedor:** trocar de provedor não apaga a chave do outro.
+- **Erros do Google classificados pelo corpo, não só pelo status:** chave
+  inválida chega como 400 e virou `auth_error` (pelo status, a tela mandaria
+  conferir o modelo); 429 com quota `PerDay` virou `quota_exhausted`, que não é
+  repetido; 429 por minuto respeita o `retryDelay` do corpo. O erro do Google
+  pode vir dentro de uma lista, e o detalhe agora é lido nos dois formatos.
+- **Fila:** com o Gemini, "Gerando CTAs em paralelo" fica em 1.
+- **Uso da IA:** coluna `provider` em `ai_request_logs` (migração em `db.ts`) e
+  na tela. A migração não é opcional: `logAiRequest` engole erro de propósito,
+  e sem a coluna o registro de uso pararia em silêncio.
+
+### Decisões que não são óbvias
+
+- **Nunca troca de provedor sozinho.** Falhou ou acabou a cota: o vídeo mostra
+  o erro. Cair para o GhostCLI gastaria chamada paga sem pedido.
+- **Mudar de provedor ou de modelo muda o hash** do reaproveitamento (o modelo
+  entra nele): a primeira geração com o Gemini chama a IA mesmo em vídeo já
+  gerado pelo GhostCLI. É o certo — o resultado salvo é de outro modelo.
+- **Privacidade:** no plano gratuito o Google pode usar o conteúdo enviado
+  (transcrição, OCR, comentários) para melhorar os produtos, com revisão
+  humana. A tela diz isso no bloco do Gemini.
+
+### Verificado
+
+Typecheck; 393/393 testes (13 novos em `tests/geminiProvider.test.ts`: erros
+do Google, lista de modelos, uma chave por provedor, sem troca automática, e a
+chamada de ponta a ponta — URL do Google, Bearer com a chave do Gemini, modelo
+escolhido, `provider = gemini` no registro — com banco temporário). Conferido
+que o banco real não foi tocado pelos testes.
+
+**Não verificado:** nenhuma chamada real ao Google (falta a chave do usuário);
+o formato real do 429 do endpoint compatível — a detecção de cota diária
+segue o marcador `PerDay` que o Google usa nos `quotaId`, e sem ele o 429 é
+tratado como limite por minuto; a tela; o build.
+
+### Ajuste no mesmo dia: só os três modelos principais
+
+Pedido do usuário: na lista, só os principais — básico, médio e avançado. A
+tela deixou de listar todos os modelos da conta e oferece três, todos com plano
+gratuito (`GEMINI_MAIN_MODELS` em `geminiModels.ts`):
+
+| Nível | Modelo | Por quê |
+| --- | --- | --- |
+| Básico | `gemini-3.5-flash-lite` | Flash-Lite mais novo com plano gratuito |
+| Médio | `gemini-3.8-flash` | Flash mais novo; padrão |
+| Avançado | `gemini-2.5-pro` | Único Pro com plano gratuito (o `gemini-3.1-pro-preview` é pago) |
+
+A conta continua sendo consultada, só para marcar cada um como disponível ou
+não para a chave; se a consulta falhar, os três aparecem e o motivo vai em
+vermelho. Um modelo salvo fora dos três continua visível no select ("Atual"),
+para a tela não mostrar outro modelo sem o usuário ter trocado.
+
+A documentação de chaves que o usuário trouxe diz que o Google **recusa chave
+padrão sem restrição** e que chaves novas do AI Studio já saem do tipo "auth".
+A dica do campo da chave e a mensagem do 403 na lista de modelos dizem isso.
+
+396/396 testes (3 novos). Continua sem chamada real ao Google.
+
+## 29. Editor — "Outro CTA": trocar o texto pelos CTAs gerados (2026-09-30)
+
+Pedido do usuário: na seção "Texto (CTA)" do editor, um botão ao lado do texto
+que carrega outro CTA gerado para o vídeo, e a indicação do estilo (curiosidade,
+suspense…).
+
+- `/api/editor/library` passa a mandar `ctaOptions` de cada vídeo: as sugestões
+  do `cta_suggestions`, recomendada primeiro, sem texto repetido (o CTA que já
+  estava no vídeo pode coincidir com um gerado). Uma consulta para todos os
+  vídeos, não uma por vídeo.
+- `CtaPicker` (painel de template e aba Preview): etiqueta com o estilo do texto
+  que está sobre o vídeo ("Curiosidade", "Suspense"… ou "Texto próprio" quando
+  não é um dos gerados), a nota "recomendado" / "já estava no vídeo" / "dos
+  comentários", botões ‹ e "↻ Outro CTA" e a posição (3/10).
+- A regra ("qual é o próximo", "de que estilo é o atual") está em
+  `lib/editor/ctaOptions.ts`, pura e testada.
+
+**Não muda a Fila:** o botão preenche o mesmo campo de texto do editor, que é
+salvo sozinho como texto do vídeo no editor (`editor_video_texts`). Um CTA igual
+ao da análise conta como "sem texto próprio", pela regra que já existia.
+
+Verificado: typecheck; 404/404 testes (8 novos em `tests/editorCtaOptions.test.ts`,
+a rota contra banco temporário). Banco real: 98 vídeos na edição, ~10 CTAs cada.
+**Não verificado:** a tela e o build.
+
+**Ajuste pedido pelo usuário:** o CTA que já estava no vídeo original
+(`origin = 'original'`, lido pelo OCR) aparece com a etiqueta e a nota em
+**verde**. Na fusão de textos repetidos, a marca "já estava no vídeo" passou a
+sobreviver: antes, se o texto do vídeo coincidisse com um CTA gerado, só o
+gerado ficava e o verde nunca apareceria. 404/404 testes.
+
+## 30. Editor — aba Efeitos (2026-09-30)
+
+Pedido do usuário: no painel de template, um botão para alternar para
+"Efeitos" (como o Recorte ↔ Preview), com efeitos rápidos que funcionem em
+"Este, Seleção ou Todos", e uma opção de aplicar em todos de uma vez.
+
+### O que ficou de fora, e por quê
+
+O pedido incluía "Anti Duplicidade", "efeitos que enganem as plataformas para
+não identificar os vídeos" e "mudar o som para a plataforma não identificar".
+Não foram feitos: o acervo é de cortes de filmes/séries de terceiros, e esses
+efeitos existem para contornar a detecção de conteúdo (direitos autorais) das
+plataformas. O usuário foi avisado e concordou em seguir só com os efeitos de
+edição. Não reabrir sem uma conversa explícita sobre isso.
+
+### Efeitos (lib/editor/effects.ts)
+
+| Efeito | Exportação (FFmpeg) | Preview |
+| --- | --- | --- |
+| Espelhar | `hflip` depois do recorte | `scaleX(-1)` na caixa do recorte (a mesma região) |
+| Cortar início/fim | `-ss`/`-t` na entrada: o grafo recebe só o trecho | o vídeo toca só o trecho |
+| Realçar cores | `eq=contrast=1.08:saturation=1.18` | filtro CSS equivalente — **aproximado**, a tela diz |
+| Velocidade 1,05–1,25× | `setpts` no vídeo, `atempo` no áudio original (sem mudar o tom) | `playbackRate` |
+| Zoom leve 1,05–1,2× | recorte menor em volta do centro (`zoomRect`) | a mesma conta |
+| Melhorar áudio | `highpass=f=80` + `loudnorm` a -14 LUFS no áudio final | — (preview é mudo) |
+
+Decisões que não são óbvias:
+
+- **A duração do texto e da música é a de SAÍDA** (`outputDuration`: trecho
+  cortado ÷ velocidade). A música é cortada nela e não é acelerada.
+- **Efeitos são por vídeo** (`editor_video_effects`) e **fotografados no job**
+  ao exportar, como o recorte.
+- **"Este vídeo" grava a cada toque; "Seleção" e "Todos" só pelo botão.** Um
+  toque sem querer não pode reescrever os efeitos de 98 vídeos. Em lote a
+  configuração inteira SUBSTITUI a de cada vídeo, e a tela diz isso.
+- **"Todos" é resolvido no servidor** (`listEditorVideoIds`), não pela lista
+  que o navegador tem.
+- **Corte que deixa menos de 1 s** vira erro claro antes do FFmpeg.
+- O painel de template fica **escondido, não desmontado**, quando a aba
+  Efeitos está aberta: desmontar perderia o salvamento automático pendente.
+
+### Verificado
+
+Typecheck; 421/421 testes (17 novos em `tests/editorEffects.test.ts`). A
+exportação foi **medida** com FFmpeg real sobre um vídeo sintético (esquerda
+vermelha, direita azul, tom a -30 dB): 6 s → ~4 s com corte 0,5+0,5 e 1,25×;
+o lado esquerdo passa de vermelho a azul com o espelho; o áudio sai perto de
+-14 LUFS (+8 dB ou mais sobre a origem); os seis efeitos juntos renderizam.
+
+Numa rodada da suíte completa, um teste de OCR (`media.test.ts`, "gancho no
+terço superior") falhou uma vez com a máquina carregada pelo FFmpeg do teste
+novo; passou isolado e em duas rodadas completas seguidas. Instabilidade de
+carga, não regressão — mas fica anotada.
+
+**Não verificado:** a aba na tela, o preview no navegador (velocidade, corte,
+espelho) e uma exportação disparada pela interface; o build.
+
+**Conferido depois, no mesmo dia:** o usuário buildou (10:29) e aplicou os
+efeitos em Todos (98 vídeos, 10:33). Um vídeo real dele foi exportado pelo
+mesmo motor, com saída na pasta temporária (nada na fila, no banco nem em
+data/output): 61,65 s → 58,0 s (esperado 58,05), −22,3 → −14,3 LUFS,
+1080×1920 H.264/AAC BT.709 no QSV, 8,4 s de render; o quadro comparado mostra
+template, zoom e cor certos. Achado: o zoom corta as bordas — a legenda gravada
+no filme, perto da borda de baixo, saiu cortada.
+
+## 31. Editor — painel de preview acompanha a rolagem (2026-09-30)
+
+Pedido do usuário: o painel da direita (Recorte / Preview) deve descer junto ao
+rolar a lista de vídeos, que é longa.
+
+O painel virou `sticky` logo abaixo do cabeçalho (`top-[72px]`), com altura
+máxima da janela e rolagem interna quando é mais alto que ela.
+
+**A causa de o `sticky` não bastar:** `globals.css` tinha `overflow-x: hidden`
+em `html, body`. Isso transforma o `body` num contêiner de rolagem que nunca
+rola, e todo `position: sticky` passa a se medir por ele — não gruda. O próprio
+cabeçalho do app (`sticky top-0`) provavelmente já não grudava. Trocado por
+`overflow-x: clip`, que esconde a sobra horizontal do mesmo jeito sem criar
+contêiner de rolagem.
+
+**Não verificado:** typecheck e build (o terminal ficou indisponível na hora) e
+a tela.
+
+## 32. Gemini: "Gerar CTAs" falhando com 503 e demorando minutos (2026-09-30)
+
+Relato do usuário: pôs um vídeo para gerar CTA com o Gemini, deu erro e demorou
+muito.
+
+### O que o banco mostrou
+
+- Configuração: análise em `gemini-3.5-flash-lite`, geração em
+  `gemini-3.8-flash`, timeout 90 s, 2 tentativas extras.
+- A **análise** funcionou em 3–4 s (flash-lite).
+- A **geração** (3.8-flash) falhou: uma vez por timeout e depois com **503
+  "This model is currently experiencing high demand"** — sobrecarga no Google;
+  no plano gratuito o usuário é o último da fila.
+- Job 1: 13:54 → erro às 14:03 (**9 min**). Job 2: 14:15 → erro às 14:20. A
+  demora era insistir no modelo sobrecarregado: timeout de 90 s × tentativas do
+  cliente × 3 tentativas do job.
+
+### Correção
+
+1. **Modelo reserva no Gemini** (`fallbackModel = gemini-3.5-flash-lite`,
+   `ChatCompletionsProvider.send`): o modelo escolhido tem UMA chance, com
+   espera de até 45 s e sem novas tentativas; se voltar 503, timeout, 429 ou
+   cota esgotada, o reserva responde na hora. Chave recusada ou pedido inválido
+   não acionam o reserva (outro modelo não resolveria). As duas chamadas ficam
+   em "Uso da IA", com o modelo de cada uma. **Não é troca de provedor**: o
+   reserva é do mesmo Gemini gratuito, e o GhostCLI (pago) continua sem reserva
+   — lá o 503 é repetido no mesmo modelo, nunca trocado.
+2. **Raciocínio baixo** (`reasoning_effort: "low"`, documentado pelo Google no
+   endpoint compatível para Gemini 2.5 e 3.x): ganchos curtos não precisam de
+   raciocínio longo, e ele é a maior parte do tempo de resposta. Se um modelo
+   recusar o parâmetro, o cliente já repete a chamada sem os opcionais.
+
+Nota: o reaproveitamento por hash usa o modelo CONFIGURADO. Se o reserva
+atendeu, a próxima vez com a mesma entrada reaproveita o resultado dele.
+
+### Defeito antigo corrigido de passagem
+
+Na suíte completa, `iaSobDemanda` e `reanalysis` falharam de forma
+intermitente: `latestJob` ordenava só por `created_at`, e dois jobs no mesmo
+milissegundo empatavam — voltava o antigo (o "empate teórico" anotado no §25).
+`latestJob`, `latestJobsByVideo` e `queueCounts` desempatam agora por `rowid`
+(ordem de inserção). Depois: 425/425 em três rodadas completas seguidas.
+
+### Verificado
+
+Typecheck; 425/425 (4 novos em `geminiProvider.test.ts`: reserva no 503 com as
+duas chamadas registradas, chave recusada sem reserva, raciocínio baixo só no
+Gemini, GhostCLI sem troca de modelo). **Não verificado:** uma chamada real ao
+Google com o reserva e o raciocínio baixo — depende do build e de o usuário
+rodar "Gerar CTAs" de novo.
+
+### Ajuste no mesmo dia: modelo recomendado por etapa
+
+Pedido do usuário: na lista de modelos, marcar o recomendado para cada etapa —
+o que faz o trabalho gastando menos.
+
+- `GEMINI_MAIN_MODELS[].recommendedFor`: o **Básico (`gemini-3.5-flash-lite`)
+  é o recomendado para análise e para geração**, pelo medido na conta do
+  usuário (3–4 s; o 3.8-flash dava 503) e por ser o de maior cota gratuita. O
+  padrão de instalação nova passou a ser ele. A escolha já salva do usuário não
+  foi alterada.
+- Na tela: "★ Recomendado" na opção, e, quando o escolhido é outro, a linha
+  "Recomendado para esta etapa… Usar o recomendado".
+- Reserva nos dois sentidos (`GEMINI_FALLBACK_MODELS`): escolhido o Médio, o
+  reserva é o Básico; escolhido o Básico, o reserva é o Médio.
+
+426/426 testes.
+
+## 33. Editor — som no Preview (2026-09-30)
+
+Relato do usuário: na aba Preview não dava para escutar o vídeo. O `<video>` do
+`CompositionPreview` era sempre `muted` (o navegador bloqueia autoplay com
+som). Agora há um botão 🔇/🔊 no canto do preview; o clique liga o som. Com o
+template em "mudo" ou "substituir pela música", o botão fica desativado e diz
+por quê — a música só existe no arquivo exportado. Typecheck, 426/426; tela
+não conferida.
+
+## 34. Editor — barra de exportação fixa e progresso à vista (2026-09-30)
+
+Pedido do usuário: um botão para exportar os vídeos selecionados (ou todos) e
+uma aba para acompanhar o carregamento, vídeo a vídeo e do lote.
+
+**Os dois já existiam desde a Fase 8** — o que faltava era achá-los. Com 98
+vídeos na lista, a barra de ações ficava DEPOIS de todos os cards (rolagem
+inteira até o fim para achar "Exportar"), e o painel da fila fica no TOPO da
+página: quem clicava em Exportar lá embaixo não via o progresso começar.
+
+- A barra de ações virou `sticky bottom-3`: acompanha a janela enquanto a lista
+  está à vista. Ganhou "Selecionar todos (N)" e o **Exportar em verde**
+  (`emerald-600`), que é a ação final do módulo.
+- A barra continua visível enquanto houver exportação em andamento, mesmo sem
+  seleção, com o andamento do lote ("12 de 30 prontos · 40%") e um atalho que
+  rola até o painel.
+- Depois de enfileirar, a tela rola sozinha até o painel da fila
+  (`id="fila-de-exportacao"`).
+- O resumo vem do próprio painel (`onSummary`), não de uma segunda consulta: a
+  conta do andamento continua num lugar só.
+
+**Estado do acervo (conferido):** 98 vídeos na edição, **só 2 com template
+aplicado**. Os outros 96 usam o template aberto no painel da esquerda — a
+regra da §20, que o aviso pós-exportação já relata ("quantos saíram com cada
+template"). Sem template aplicado e sem template aberto, a exportação recusa
+com a contagem, em vez de gerar vídeo sem template.
+
+Typecheck, 426/426. **Não verificado:** a tela e uma exportação disparada pela
+interface.
+
+## 35. Pasta de saída configurável e página de Exportações (2026-09-30)
+
+Pedido do usuário: escolher em Configurações a pasta onde os vídeos são
+gravados, e uma página nova (ao lado de Fila e Editor) com os vídeos já
+prontos e todos os dados para copiar na hora de publicar.
+
+### Pasta de saída
+
+`settings.paths.outputDir` (vazio = a padrão, `EDITOR_OUTPUT_DIR`/`data/output`).
+`lib/editor/outputDir.ts` resolve e valida; `export.ts` e `exportQueue.ts`
+passaram a usar a resolvida no lugar de `env.outputDir`.
+
+A validação **escreve um arquivo de teste** na pasta antes de salvar, e não só
+confere se ela existe: pasta de rede, de disco removível ou sem permissão passa
+no `existsSync` e falha na hora de gravar — no meio do lote, com o vídeo já
+renderizado. Caminho relativo é recusado com instrução. A tela mostra a pasta
+em uso (`outputDirInUse`), mesmo com o campo vazio.
+
+### Página `/exports`
+
+Rota `/api/exports` e `ExportsPanel`: os jobs `completed`, com miniatura, nome
+do arquivo, tamanho, duração e, para copiar, CTA, hashtags, legenda do kit,
+resumo, enredo e transcrição — cada um com botão próprio, mais "Copiar tudo"
+(legenda + hashtags). Filtro "Desta sessão / Todos"; a sessão é marcada por
+`globalThis.__appStartedAt`, gravado no `instrumentation.ts`.
+
+Duas decisões:
+
+- **Arquivo que sumiu é marcado, não escondido.** A primeira versão filtrava da
+  lista quem não tinha mais o MP4 no disco. Isso é o padrão que o projeto já
+  pagou caro (falha parecendo ausência): quem exportou 10 e visse 8 não teria
+  como saber o que houve. Agora vem com `fileMissing` e o aviso na tela.
+- **O CTA vem da mesma fonte do editor** (a sugestão com `is_recommended`), e
+  não de `scene_analyses.recommended_text`. **Um teste pegou a divergência**:
+  as duas não são a mesma coisa, e o que vale aqui é o texto que FOI para o
+  vídeo.
+
+### Layout em feed, como no celular
+
+Pedido do usuário logo em seguida: a página no formato do TikTok/Instagram — o
+vídeo à esquerda em 9:16, arrastando para cima para o próximo, e os dados do
+vídeo em reprodução ao lado.
+
+- `Feed`: moldura 9:16, gesto de arrastar (pointer events), roda do mouse com
+  trava de uma rolagem por vídeo, setas ↑ ↓, clique para pausar e botão de som
+  (começa mudo porque o navegador bloqueia autoplay com áudio). Resistência no
+  primeiro e no último, como no celular.
+- Só os vizinhos (anterior, atual, próximo) ficam montados: um `<video>` por
+  exportação faria o navegador baixar dezenas de MP4 ao mesmo tempo.
+- Rota nova `/api/exports/[jobId]/media`: serve o MP4 com suporte a `Range`
+  (sem isso um arquivo de 70 MB só tocaria depois de baixar inteiro). **O
+  caminho vem do job no banco, nunca do cliente** — aceitar caminho do
+  navegador serviria qualquer arquivo da máquina. Job não concluído ou arquivo
+  ausente devolvem 404.
+
+Verificado: typecheck, 439/439 (13 novos em `tests/exportsPage.test.ts`, com
+banco e pastas temporários, incluindo o Range e a recusa de id que não é job).
+**Não verificado:** as telas, o gesto no navegador e o build.
+
+### Fato do ambiente, fora desta entrega
+
+Os dois primeiros vídeos exportados pelo usuário pela interface terminaram bem
+(19:03 UTC, `completed`, 100%, ~27 s e ~22 s), mas os MP4 **não estão mais** em
+`data/output` — a pasta está vazia, com data de modificação posterior à
+exportação. Nada no código apaga `.mp4` de lá (`removeOrphanPartials` só
+remove `.processing`). Perguntado ao usuário.
+
+## 36. Som no feed e hashtags por IA nas Exportações (2026-09-30)
+
+### O áudio do vídeo exportado
+
+Relato: "na exportação está faltando o áudio". **Medido no arquivo do usuário**
+(`20240321_..._editado.mp4`): tem trilha AAC, média −18 dB, pico −1,2 dB,
+integrada −15,3 LUFS. O arquivo está certo; o problema era ouvir na tela.
+
+**Causa achada:** `muted` no React é tratado como ATRIBUTO, e atributo de
+`<video>` só vale na criação do elemento. O botão de som mudava o estado, o
+React re-renderizava, e o vídeo continuava mudo. Corrigido no feed de
+Exportações e no preview do Editor: o `muted` passa a ser aplicado na
+PROPRIEDADE do elemento, por efeito. É a armadilha clássica do `<video>` em
+React e não aparece em teste de unidade — só na tela.
+
+### Hashtags por IA (pedido: "mais 2, virais")
+
+Botão "✨ +2 com IA" em cada vídeo e "✨ +2 em todos (N)" para a lista inteira,
+na página de Exportações. Uma chamada por vídeo; vídeo que já tem sugestão é
+pulado (não gasta chamada), e "↻ Outras 2" refaz quando o usuário pede.
+
+**O limite dito com honestidade, na tela e no prompt:** ninguém sabe de
+antemão quais hashtags dão visualização — nem o modelo. O que se pede é
+hashtag ESPECÍFICA, que classifica o conteúdo e leva o vídeo a quem procura
+aquilo. Hashtag de volume (#viral, #fyp, #parati) é **recusada pelo
+validador**, não só desaconselhada no prompt: ela mistura o vídeo com qualquer
+assunto e não traz alcance (mesma regra do kit de publicação, §documentada em
+`publishKitSystemPrompt`). O validador também impede repetir as que o vídeo já
+tem — o modelo foi instruído, mas nada o obriga.
+
+Na tela, as da IA aparecem em **verde**, separadas das capturadas pela
+extensão, com o motivo no título: sugestão e fato observado não se misturam.
+
+Guardadas em `video_hashtags.ia_json` (coluna nova, com migração em `db.ts`).
+Cota esgotada ou credencial recusada **interrompem o lote** em vez de repetir o
+erro em 98 vídeos.
+
+Verificado: typecheck, 452/452 (13 novos em `tests/hashtagsIa.test.ts`).
+**Não verificado:** uma chamada real ao modelo com este prompt — a qualidade
+das hashtags ainda não foi vista; as telas; o build.
+
+## 37. Legenda em japonês na página de Exportações (2026-09-30)
+
+Pedido do usuário: gerar também uma legenda em japonês para cada vídeo, no
+formato que ele trouxe (exemplos reais), sempre aberta pela hashtag `#tvアニメ`,
+com a opção de desligar em Configurações.
+
+- `publish.japaneseCaption` (ligada por padrão) e `publish.japaneseHashtag`
+  (`#tvアニメ`, editável) em Configurações.
+- `japaneseCaptionSystemPrompt`: os dois formatos dos exemplos — mistério curto
+  e anúncio de revelação (`『tema』…ついに解禁!!`).
+- `validateJapaneseCaption` confere o que o prompt não garante: que a resposta
+  **veio mesmo em japonês** (kana/kanji — um modelo pode responder em
+  português e a legenda perderia a razão de ser) e que a **hashtag abre o
+  texto**, sem duplicar quando o modelo já a colocou.
+- Guardada em `video_jp_captions` (tabela nova), separada de `publish_kits`:
+  aquele é o kit em português, com outro prompt.
+- Com a opção ligada, cada "gerar" faz **2 chamadas por vídeo**. Quem já tem
+  hashtags mas não tem a legenda **não é pulado** (senão ligar a opção depois
+  nunca geraria nada), e as hashtags não são refeitas à toa.
+
+**O limite dito ao usuário, e na tela:** a hashtag é de anime japonês. Num
+corte que não é anime ela classifica o vídeo como outra coisa, e hashtag fora
+do assunto pode reduzir o alcance em vez de aumentar — é o contrário da regra
+que o próprio projeto segue no kit de publicação. A escolha é do usuário; o
+sistema não promete resultado.
+
+### Correção do áudio (§36) conferida no arquivo
+
+O MP4 do usuário tem áudio (−15,3 LUFS); o mudo era do player, por `muted` ser
+atributo no React. Ver §36.
+
+Verificado: typecheck, 461/461 (22 em `tests/hashtagsIa.test.ts`, incluindo
+ligar a opção depois e o caso de resposta em português). **Não verificado:**
+uma chamada real ao modelo — a qualidade do japonês não foi vista; as telas; o
+build.
+
+## 38. Revisão da documentação a partir dos dados (2026-09-30, fim do dia)
+
+Pedido do usuário: "salve tudo na documentação". A revisão partiu do banco, não
+do que os .md diziam — o mesmo método da §20.
+
+### O que os dados mostraram, e os docs não
+
+| Fato (banco, 2026-09-30) | O que estava escrito |
+| --- | --- |
+| 98 vídeos, 97 com fala transcrita | "7 vídeos" (§5.2 do HANDOFF, de 29/09) |
+| 26.704 comentários em 98 vídeos; fila com 98 pedidos `done` | "a fila nunca funcionou" |
+| Gemini com 38 chamadas ok, 9 reaproveitadas, 7 erros | "nenhuma chamada real ao Google" |
+| Hashtags por IA e legenda japonesa geradas em 2 vídeos | "não verificado" |
+| 98 vídeos com efeitos, 97 com recorte, 4 exportações prontas | — |
+
+**A fila de captura de comentários funcionou** depois de o usuário recarregar a
+extensão: é a confirmação que faltava desde a §20.
+
+**As duas gerações de IA do dia foram conferidas no conteúdo**, não só no
+status: num corte de viagem no tempo saíram `#maquinadotempo` e
+`#ficcaocientifica`; num de atirador, `#atiradordeelite` e `#suspense`. As
+legendas japonesas seguiram o formato dos exemplos do usuário (hashtag, gancho
+com emoji, corpo, convite a ver até o fim), em ~1,2 s cada.
+
+### O que foi reescrito
+
+- `HANDOFF.md`: três fases (a de Exportações entrou), §4 "O que funciona" com
+  os números reais, mapa do código com os arquivos novos, e o §9 refeito — uma
+  tabela do que cada entrega do dia tem de prova e o que falta conferir na tela.
+- `README.md`: Gemini na descrição da IA, efeitos, página de Exportações,
+  pasta configurável, legenda japonesa, entidades e contagem de testes.
+- `ROADMAP.md`: item 0.9 (segundo provedor) e a **Fase 4 — Publicação**, que
+  nasceu dos pedidos durante o uso.
+- `video-editor/ARCHITECTURE.md`: rotas de `/api/exports`, tabela
+  `video_jp_captions`, e as regras de efeitos e da pasta de saída.
+- `video-editor/IMPLEMENTATION_PLAN.md`: Fase 12 (página de Exportações).
+
+### A pendência mais cara
+
+**Nada desde `c59d36a` foi commitado** — §23 a §38, mais de 70 arquivos, dois
+dias de trabalho só no disco. Está no topo do §9 do HANDOFF.

@@ -6,6 +6,14 @@ import { FULL_FRAME, type NormalizedRect } from "@/lib/editor/crop";
 import { cropRegionTransform, croppedAspect, logoRect, placeVideoInSlot } from "@/lib/editor/template";
 import { textOpacityAt, type TextLayout } from "@/lib/editor/textLayout";
 import { drawTextLayer, ensureTextFont } from "./textCanvas";
+import {
+  DEFAULT_EFFECTS,
+  outputDuration,
+  outputTimeAt,
+  previewColorFilter,
+  zoomRect,
+  type EditorEffects,
+} from "@/lib/editor/effects";
 
 /**
  * Desenha a composicao final: fundo, video recortado no slot, overlay, logo e
@@ -27,10 +35,13 @@ export default function CompositionPreview({
   displayHeight,
   text,
   onTextLayout,
+  effects,
   children,
 }: {
   config: EditorTemplateConfig;
   crop: NormalizedRect | null;
+  /** Efeitos do vídeo: mesma geometria da exportação (zoom, espelho), cor aproximada. */
+  effects?: EditorEffects | null;
   mediaSrc: string | null;
   mediaKind: "video" | "image";
   posterSrc?: string;
@@ -45,10 +56,46 @@ export default function CompositionPreview({
   children?: ReactNode;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  // Começa mudo porque o navegador bloqueia autoplay com som; o botão liga.
+  const [muted, setMuted] = useState(true);
+  const audioMode = config.audio?.mode ?? "original";
   const scale = displayHeight / Math.max(1, config.canvasHeight);
   const displayWidth = config.canvasWidth * scale;
 
-  const effectiveCrop = crop ?? FULL_FRAME;
+  const fx = effects ?? DEFAULT_EFFECTS;
+  // Zoom como recorte menor em volta do centro — a mesma conta do filterGraph.
+  const effectiveCrop = zoomRect(crop ?? FULL_FRAME, fx.zoom);
+
+  // Mesmo motivo do feed de Exportações: `muted` é atributo no React e só vale
+  // na criação do elemento; sem aplicar na propriedade, o botão de som não liga.
+  useEffect(() => {
+    const v = videoRef.current;
+    if (v) v.muted = muted || audioMode === "mute" || audioMode === "replace";
+  }, [muted, audioMode, mediaSrc]);
+
+  // Velocidade e corte de início/fim no vídeo que toca: a origem é tocada só
+  // no trecho que entra na exportação, na velocidade dela.
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v || mediaKind !== "video") return;
+    v.playbackRate = fx.speed;
+    const onTime = () => {
+      if (!Number.isFinite(v.duration)) return;
+      const end = v.duration - fx.trimEnd;
+      if (v.currentTime < fx.trimStart - 0.05 || v.currentTime >= end) v.currentTime = fx.trimStart;
+    };
+    const onRate = () => {
+      // O navegador volta a velocidade para 1 ao trocar de mídia.
+      if (v.playbackRate !== fx.speed) v.playbackRate = fx.speed;
+    };
+    v.addEventListener("timeupdate", onTime);
+    v.addEventListener("loadedmetadata", onRate);
+    onTime();
+    return () => {
+      v.removeEventListener("timeupdate", onTime);
+      v.removeEventListener("loadedmetadata", onRate);
+    };
+  }, [mediaKind, mediaSrc, fx.speed, fx.trimStart, fx.trimEnd]);
   const placement = placeVideoInSlot(
     croppedAspect(effectiveCrop, videoWidth, videoHeight),
     config,
@@ -90,6 +137,9 @@ export default function CompositionPreview({
         {mediaSrc ? (
           // Caixa do encaixe: dentro dela a mídia inteira é ampliada e
           // deslocada, de modo que só a região do recorte apareça.
+          // Espelho nesta caixa, que contém exatamente a região recortada: é o
+          // `hflip` depois do crop da exportação. Espelhar o <video> inteiro
+          // mostraria outra região quando o recorte não é centralizado.
           <div
             className="absolute overflow-hidden"
             style={{
@@ -97,6 +147,8 @@ export default function CompositionPreview({
               top: (placement.y - config.videoY) * scale,
               width: placement.width * scale,
               height: placement.height * scale,
+              transform: fx.mirror ? "scaleX(-1)" : undefined,
+              filter: previewColorFilter(fx),
             }}
           >
             {mediaKind === "video" ? (
@@ -107,7 +159,7 @@ export default function CompositionPreview({
                 controls={false}
                 autoPlay
                 loop
-                muted
+                muted={muted || audioMode === "mute" || audioMode === "replace"}
                 playsInline
                 className="absolute max-w-none"
                 style={{
@@ -169,10 +221,35 @@ export default function CompositionPreview({
           scale={scale}
           videoRef={mediaKind === "video" ? videoRef : null}
           onLayout={onTextLayout}
+          effects={fx}
         />
       )}
 
       {children}
+
+      {mediaKind === "video" && mediaSrc && (
+        <button
+          type="button"
+          onClick={() => {
+            setMuted((m) => !m);
+            // Clique do usuário: agora o navegador deixa tocar com som.
+            void videoRef.current?.play().catch(() => {});
+          }}
+          disabled={audioMode === "mute" || audioMode === "replace"}
+          title={
+            audioMode === "mute"
+              ? "O template está com o áudio mudo"
+              : audioMode === "replace"
+                ? "O template troca o áudio pela música; a música só existe no arquivo exportado"
+                : muted
+                  ? "Ligar o som"
+                  : "Desligar o som"
+          }
+          className="absolute bottom-2 right-2 z-10 rounded-full bg-black/70 px-2.5 py-1 text-sm text-white transition hover:bg-black/90 disabled:opacity-50"
+        >
+          {muted || audioMode === "mute" || audioMode === "replace" ? "🔇" : "🔊"}
+        </button>
+      )}
     </div>
   );
 }
@@ -188,12 +265,15 @@ function TextLayerCanvas({
   scale,
   videoRef,
   onLayout,
+  effects,
 }: {
   text: string;
   style: EditorTextStyle;
   scale: number;
   videoRef: RefObject<HTMLVideoElement | null> | null;
   onLayout?: (layout: TextLayout | null) => void;
+  /** O texto é temporizado no tempo do vídeo exportado (cortado e acelerado). */
+  effects: EditorEffects;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [opacity, setOpacity] = useState(1);
@@ -225,13 +305,15 @@ function TextLayerCanvas({
     let frame = 0;
     const tick = () => {
       const v = videoRef.current;
-      if (v && Number.isFinite(v.duration)) setOpacity(textOpacityAt(v.currentTime, style, v.duration));
+      if (v && Number.isFinite(v.duration)) {
+        setOpacity(textOpacityAt(outputTimeAt(v.currentTime, effects), style, outputDuration(v.duration, effects)));
+      }
       frame = requestAnimationFrame(tick);
     };
     frame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frame);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [timed, videoRef, styleKey]);
+  }, [timed, videoRef, styleKey, effects.trimStart, effects.trimEnd, effects.speed]);
 
   return (
     <canvas

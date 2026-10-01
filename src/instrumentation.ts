@@ -10,6 +10,11 @@ export async function register(): Promise<void> {
   const { db } = await import("./lib/db");
   db();
 
+  // Início desta sessão do servidor, para a página de Exportações separar "o
+  // que saiu agora" do histórico. No globalThis porque o Next.js carrega uma
+  // cópia de cada módulo por contexto (ver HANDOFF, armadilha 6).
+  (globalThis as { __appStartedAt?: string }).__appStartedAt ??= new Date().toISOString();
+
   // A fila do editor sobe sempre aqui, independente de WORKER_IN_PROCESS: o
   // cancelamento precisa alcançar o FFmpeg, que só existe neste processo.
   const { startExportWorker } = await import("./lib/editor/exportQueue");

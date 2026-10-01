@@ -1,12 +1,13 @@
-import type { CtaOptions, SceneAnalysis, SceneContext } from "./types";
+import type { CtaOptions, SceneAnalysis, SceneContext, Transcript } from "./types";
 import type { CommentInsights } from "./pipeline/commentInsights";
+import { transcriptFailure } from "./pipeline/speechBasis";
 import { describeDistribution, GENERIC_PATTERNS, MAX_CHARS, ULTRASHORT_MAX_CHARS } from "./pipeline/ctaPlan";
 
 /**
  * Versao do prompt. Fica gravada em cada analise para que resultados antigos
  * possam ser comparados com os novos depois de uma mudanca de texto.
  */
-export const PROMPT_VERSION = "2026-09-24-viral";
+export const PROMPT_VERSION = "2026-09-29-enredo-fala";
 
 /** Prompt central da especificacao (secao 12). */
 export const CORE_PROMPT = `Você é um especialista em criação de CTAs virais para vídeos curtos
@@ -55,6 +56,14 @@ sem blocos de código:
 
 {
   "sceneSummary": "string, até três frases, o que acontece no vídeo do início ao fim",
+  "plot": "string ou null — o ENREDO reconstruído a partir das falas: quem são, o que cada um quer, o que está em jogo, o que muda ao longo do corte. null se não houver transcrição de fala",
+  "keyLines": [
+    {
+      "atSeconds": number|null,
+      "text": "trecho LITERAL da transcrição, copiado como está",
+      "why": "o que essa fala revela da história"
+    }
+  ],
   "analysisLimitations": ["string"],
   "conflict": "string ou null — o conflito central",
   "curiosity": "string ou null — o que desperta curiosidade",
@@ -79,6 +88,17 @@ sem blocos de código:
   }
 }
 
+A FALA É A EVIDÊNCIA PRINCIPAL DA HISTÓRIA. Num corte de filme ou série, é o
+diálogo que diz quem são os personagens, o que querem e o que está em jogo; a
+imagem e o texto na tela completam. Quando houver transcrição:
+- leia TODAS as falas, do início ao fim, antes de escrever o enredo;
+- em "plot", conte a história que as falas revelam, sem inventar o que não
+  foi dito nem mostrado;
+- em "keyLines", escolha de 2 a 5 falas que carregam o conflito, a ameaça ou a
+  virada, copiadas literalmente da transcrição com o instante em segundos. O
+  sistema descarta a fala que não estiver na transcrição.
+Sem transcrição de fala, "plot" é null e "keyLines" é [].
+
 Se as evidências não bastarem para nomear a obra, devolva
 "status": "not_identified_safely" com "title": null. Não preencha o título
 por semelhança vaga.`;
@@ -90,13 +110,20 @@ sem blocos de código:
 {
   "recommendedCta": { "text": "string", "reason": "uma frase explicando a escolha" },
   "suggestions": [
-    { "text": "string", "style": "curiosidade|suspense|conflito|reviravolta|emocional|ultracurto" }
+    {
+      "text": "string",
+      "style": "curiosidade|suspense|conflito|reviravolta|emocional|ultracurto",
+      "reason": "em qual fala ou ponto do enredo o gancho se apoia"
+    }
   ]
 }
 
 Gere exatamente ${options.count} sugestões inéditas, distribuídas assim:
 ${describeDistribution(options.count)}.
 O CTA recomendado deve ser uma dessas sugestões, repetido em "recommendedCta".
+O recomendado é SEMPRE do estilo "curiosidade" e, quando houver transcrição,
+nasce de uma fala ou de um ponto do enredo que as falas revelam: abre a
+lacuna que aquela fala cria, sem entregar a resposta.
 
 Limites: até ${MAX_CHARS} caracteres por sugestão e até ${ULTRASHORT_MAX_CHARS}
 nas do estilo "ultracurto" (4 a 7 palavras). Em geral use 6 a 12 palavras.
@@ -120,7 +147,16 @@ export function generationSystemPrompt(options: CtaOptions): string {
     "uma das opções mostradas ao usuário — não o repita entre as suas sugestões inéditas. Em vez disso, " +
     "gere variações claramente diferentes dele, explorando ângulos distintos de curiosidade, suspense e " +
     "mistério a partir do mesmo elemento narrativo.";
-  return `${CORE_PROMPT}\n\n${spoiler}\n${reference}\n${original}\n\n${generationContract(options)}`;
+  const story =
+    "O GANCHO NASCE DO ENREDO. Quando houver ENREDO e FALAS-CHAVE, cada sugestão " +
+    "precisa partir de um elemento concreto da história que as falas revelam — a " +
+    "ameaça dita, o segredo insinuado, a decisão anunciada, a frase que muda tudo. " +
+    "Prefira o que os personagens DIZEM ao que a imagem sugere. Pode parafrasear ou " +
+    "citar um trecho curto de uma fala, mas nunca atribua a alguém algo que não está " +
+    "na transcrição. No campo \"reason\" de cada sugestão, diga em qual fala ou ponto " +
+    "do enredo ela se apoia. Sem enredo, trabalhe com o resumo e seja mais contido: " +
+    "sem a fala, a história é conhecida só pela metade.";
+  return `${CORE_PROMPT}\n\n${story}\n\n${spoiler}\n${reference}\n${original}\n\n${generationContract(options)}`;
 }
 
 // ------------------------- Montagem das evidencias --------------------------
@@ -161,9 +197,13 @@ export function buildAnalysisUserMessage(ctx: SceneContext): string {
   else for (const l of ctx.limitations) lines.push(`- ${l}`);
   lines.push("");
 
-  lines.push("TRANSCRIÇÃO");
+  lines.push("TRANSCRIÇÃO (evidência principal do enredo)");
   if (!ctx.transcript || !ctx.transcript.hasSpeech) {
     lines.push("- Sem fala compreensível. Não suponha diálogos.");
+    const failure = transcriptFailure(ctx.transcript);
+    // Falha não é silêncio: o modelo precisa saber que a fala pode existir e
+    // só não foi ouvida, para não afirmar "ninguém fala nesta cena".
+    if (failure) lines.push(`- ATENÇÃO: a transcrição FALHOU (${failure}). O vídeo pode ter fala que não foi ouvida.`);
   } else {
     if (ctx.transcript.lowConfidence) lines.push("- Atenção: transcrição com baixa confiança geral.");
     for (const seg of ctx.transcript.segments.slice(0, 120)) {
@@ -206,8 +246,60 @@ export function buildAnalysisUserMessage(ctx: SceneContext): string {
   return untrusted(lines.join("\n"));
 }
 
-export function buildGenerationUserMessage(analysis: SceneAnalysis, options: CtaOptions): string {
+/** Teto da transcrição mandada à geração: um corte de 3 min cabe inteiro. */
+const GENERATION_TRANSCRIPT_CHARS = 6000;
+
+export function buildGenerationUserMessage(
+  analysis: SceneAnalysis,
+  options: CtaOptions,
+  transcript: Transcript | null = null,
+): string {
   const lines: string[] = [];
+
+  // O enredo e as falas vêm ANTES do resumo: é por eles que o gancho começa.
+  lines.push("ENREDO (reconstruído a partir das falas)");
+  if (analysis.plot) {
+    lines.push(`- ${analysis.plot}`);
+  } else {
+    lines.push("- Indisponível: esta análise não teve fala para reconstruir a história.");
+  }
+  lines.push("");
+
+  lines.push("FALAS-CHAVE (conferidas na transcrição)");
+  if (analysis.keyLines?.length) {
+    for (const k of analysis.keyLines) {
+      const at = k.atSeconds != null ? `[${k.atSeconds.toFixed(1)}s] ` : "";
+      lines.push(`- ${at}"${k.text}"${k.why ? ` — ${k.why}` : ""}`);
+    }
+  } else {
+    lines.push("- Nenhuma.");
+  }
+  lines.push("");
+
+  lines.push("TRANSCRIÇÃO COMPLETA");
+  if (transcript?.hasSpeech) {
+    let used = 0;
+    let cut = false;
+    for (const seg of transcript.segments) {
+      const line = `- [${seg.start.toFixed(1)}s]${seg.lowConfidence ? " [baixa confiança]" : ""} ${seg.text}`;
+      if (used + line.length > GENERATION_TRANSCRIPT_CHARS) {
+        cut = true;
+        break;
+      }
+      lines.push(line);
+      used += line.length;
+    }
+    if (cut) lines.push("- (transcrição cortada por tamanho; o enredo acima cobre o vídeo inteiro)");
+  } else {
+    const failure = transcriptFailure(transcript);
+    lines.push(
+      failure
+        ? `- A transcrição FALHOU (${failure}). O vídeo pode ter fala que não foi ouvida: não afirme que ninguém fala.`
+        : "- Sem fala compreensível no vídeo. Não suponha diálogos.",
+    );
+  }
+  lines.push("");
+
   lines.push("ANÁLISE DO VÍDEO (evidências do início ao fim)");
   lines.push(`- Resumo: ${analysis.sceneSummary}`);
   lines.push(`- Conflito: ${analysis.conflict ?? "não identificado"}`);
@@ -454,6 +546,144 @@ export function buildPublishKitUserMessage(
 }
 
 
+// --------------------------- Hashtags por IA --------------------------------
+
+/**
+ * Hashtags novas para o vídeo, geradas pela IA.
+ *
+ * O limite honesto vai no prompt: **ninguém sabe quais hashtags dão
+ * visualização**, nem o modelo. A plataforma usa hashtag para CLASSIFICAR o
+ * conteúdo, e é isso que se pede — hashtag específica do que o vídeo mostra,
+ * que é o que faz o vídeo chegar a quem procura aquilo. Hashtag de volume
+ * (#viral, #fyp) é recusada pelo validador: ela mistura o vídeo com qualquer
+ * assunto e não traz alcance (ver `publishKitSystemPrompt`).
+ */
+export function hashtagsSystemPrompt(count: number, existing: string[]): string {
+  const jaTem = existing.length
+    ? `O vídeo JÁ USA estas: ${existing.join(" ")}. Não repita nenhuma delas nem variações óbvias (singular/plural).`
+    : "O vídeo ainda não tem hashtag nenhuma.";
+
+  return `Você escolhe hashtags para um corte de filme ou série publicado como
+Reels ou TikTok.
+
+${jaTem}
+
+Gere exatamente ${count} hashtags NOVAS, em português do Brasil.
+
+COMO ESCOLHER:
+- A hashtag classifica o conteúdo. Ela faz o vídeo chegar a quem procura
+  aquele assunto, não a "todo mundo".
+- Prefira o específico ao genérico: o gênero, o tipo de cena, o tema, o
+  sentimento, o nicho de público. "#ficcaocientifica" classifica; "#viral" não.
+- Use o que as evidências mostram: o gancho, o enredo pela fala, o resumo. Não
+  invente fato, personagem nem título que não esteja nas evidências.
+- Se a obra não foi identificada com segurança, NÃO cite o nome dela.
+- Só letras, números e _, sem espaço e sem acento. Minúsculas.
+- NÃO use hashtags de volume: #viral, #fyp, #foryou, #parati, #explore,
+  #tiktok, #reels, #trend e parecidas. Elas não trazem alcance.
+
+Para cada uma, diga em "reason" a que do vídeo ela se refere.
+
+CONTRATO DE SAÍDA — responda com um único objeto JSON, sem texto ao redor,
+sem blocos de código:
+
+{
+  "hashtags": [
+    { "tag": "#exemplo", "reason": "o que do vídeo esta hashtag classifica" }
+  ]
+}`;
+}
+
+export function buildHashtagsUserMessage(ctx: {
+  cta: string | null;
+  plot: string | null;
+  sceneSummary: string | null;
+  transcript: string | null;
+  workTitle: string | null;
+}): string {
+  const lines: string[] = [];
+
+  lines.push("GANCHO QUE VAI NO VÍDEO");
+  lines.push(ctx.cta ? `- ${ctx.cta}` : "- Nenhum definido.");
+  lines.push("");
+
+  lines.push("ENREDO (pela fala)");
+  lines.push(ctx.plot ? `- ${ctx.plot}` : "- Indisponível: este vídeo não teve fala transcrita.");
+  lines.push("");
+
+  lines.push("RESUMO DA CENA");
+  lines.push(ctx.sceneSummary ? `- ${ctx.sceneSummary}` : "- Sem análise salva.");
+  lines.push("");
+
+  lines.push("OBRA");
+  lines.push(
+    ctx.workTitle
+      ? `- Identificada: ${ctx.workTitle}`
+      : "- NÃO identificada com segurança. Não cite título de obra nas hashtags.",
+  );
+
+  if (ctx.transcript) {
+    lines.push("");
+    lines.push("TRANSCRIÇÃO (início)");
+    lines.push(`- ${ctx.transcript.slice(0, 1500)}`);
+  }
+
+  return untrusted(lines.join("\n"));
+}
+
+// ------------------- Legenda em japonês (página Exportações) ----------------
+
+/**
+ * Legenda em japonês para o post, aberta por uma hashtag fixa.
+ *
+ * Os dois formatos abaixo saíram de exemplos reais que o usuário trouxe em
+ * 2026-09-30. O que não muda: a hashtag vem primeiro, e o texto é curto, com
+ * mistério e um convite a assistir até o fim.
+ *
+ * Limite honesto: a hashtag é de anime japonês. Num corte que não é anime, ela
+ * classifica o vídeo como outra coisa — a plataforma usa hashtag para
+ * classificar, e a tela diz isso ao lado do campo.
+ */
+export function japaneseCaptionSystemPrompt(hashtag: string): string {
+  return `Você escreve a legenda EM JAPONÊS de um corte de filme ou série
+publicado como Reels ou TikTok.
+
+A legenda SEMPRE começa com a hashtag ${hashtag}, na primeira linha.
+
+Escolha um dos dois formatos, o que couber melhor no conteúdo:
+
+FORMATO A — mistério curto (o mais usado):
+${hashtag} [frase de abertura que situa a cena e cria estranheza]…[1 ou 2 emojis]
+
+[2 a 3 linhas contando o que acontece, sem entregar o desfecho]
+
+[pergunta ao espectador + convite para ver até o fim][emoji]
+
+FORMATO B — anúncio de revelação:
+${hashtag}『[tema do vídeo em japonês]』
+[tema]にまつわる話題のネタがついに解禁!! [emoji]
+[tema]に潜む謎を一挙公開！
+さらに、これまで知られていなかった不思議な現象や予想外の発見に加え、
+誰も予想できなかった驚きの瞬間も明らかになりました!!
+◆注目の[tema]ポイント：
+
+REGRAS:
+- Escreva em japonês natural, não em tradução literal do português.
+- Use só o que as evidências mostram. Não invente acontecimento, personagem
+  nem título que não esteja nelas.
+- Se a obra não foi identificada com segurança, não cite o nome dela.
+- Não entregue o final da cena.
+- Entre 3 e 8 linhas no total. De 1 a 3 emojis, no máximo.
+- Não peça curtida, comentário nem compartilhamento.
+
+CONTRATO DE SAÍDA — responda com um único objeto JSON, sem texto ao redor,
+sem blocos de código:
+
+{
+  "caption": "a legenda completa em japonês, com quebras de linha reais (\\n)"
+}`;
+}
+
 // ---------------------- CTA Otimizado por Estratégia -----------------------
 
 /**
@@ -615,104 +845,6 @@ export function buildOptimizedCommentCtaUserMessage(
     if (analysis.withhold) lines.push(`- Segredo: ${analysis.withhold}`);
   } else {
     lines.push("- Sem análise do vídeo. Trabalhe apenas com os comentários.");
-  }
-
-  return untrusted(lines.join("\n"));
-}
-
-// ------------------------- Hashtags Virais ----------------------------------
-
-/**
- * Gera hashtags com alto potencial viral baseadas nos comentários e hashtags
- * já capturados do vídeo. A IA analisa padrões de engajamento, temas recorrentes
- * e termos mais citados para sugerir hashtags que maximizem descoberta.
- */
-export function viralHashtagsSystemPrompt(count: number): string {
-  return `${CORE_PROMPT}
-
-Sua tarefa é gerar ${count} hashtags com ALTO POTENCIAL VIRAL para um vídeo
-curto de filme ou série no TikTok/Reels/Shorts.
-
-PRINCÍPIOS:
-1. Hashtags hoje CLASSIFICAM conteúdo, não distribuem. O algoritmo usa hashtags
-   para entender sobre o que é o vídeo e mostrar para quem se interessa por isso.
-2. Misture categorias: obra (nome, gênero), emoção (reação do público), nicho
-   (comunidade específica) e tendência (formatos virais atuais).
-3. Evite hashtags genéricas demais (#fyp, #viral, #paraVoce) — elas não ajudam
-   na classificação e competem com milhões de vídeos irrelevantes.
-4. Prefira hashtags em português quando o público for brasileiro, mas inclua
-   termos em inglês quando forem universalmente reconhecidos no nicho.
-5. Cada hashtag deve ter entre 2 e 6 palavras (sem espaços, camelCase ok).
-6. NÃO invente nomes de obras, atores ou personagens que não estejam nas evidências.
-
-CONTRATO DE SAÍDA:
-{
-  "hashtags": ["string", "string", ...],
-  "reasoning": "string — explique brevemente a lógica por trás da seleção"
-}
-
-Gere exatamente ${count} hashtags. Ordene da mais forte para a menos forte.`;
-}
-
-export function buildViralHashtagsUserMessage(
-  insights: CommentInsights | null,
-  analysis: SceneAnalysis | null,
-  capturedHashtags: { doVideo: string[]; nosComentarios: Array<{ tag: string; vezes: number }>; todas: string[] },
-): string {
-  const lines: string[] = [];
-
-  if (capturedHashtags.doVideo.length > 0) {
-    lines.push("HASHTAGS DO VÍDEO ORIGINAL:");
-    lines.push(capturedHashtags.doVideo.map((t) => `#${t.replace(/^#/, "")}`).join(", "));
-    lines.push("");
-  }
-
-  if (capturedHashtags.nosComentarios.length > 0) {
-    lines.push("HASHTAGS MAIS CITADAS NOS COMENTÁRIOS:");
-    for (const h of capturedHashtags.nosComentarios.slice(0, 15)) {
-      lines.push(`  - #${h.tag.replace(/^#/, "")} (${h.vezes}x)`);
-    }
-    lines.push("");
-  }
-
-  if (insights) {
-    lines.push("PADRÕES DE ENGAJAMENTO DOS COMENTÁRIOS:");
-    lines.push(`- Total: ${insights.total} comentários, ${insights.totalRespostas} respostas.`);
-
-    if (insights.pedidosDeNome > 0) {
-      lines.push(`- ${insights.pedidosDeNome} pessoa(s) perguntaram o nome da obra.`);
-    }
-
-    if (insights.perguntasRecorrentes.length) {
-      lines.push("- Perguntas recorrentes:");
-      for (const p of insights.perguntasRecorrentes.slice(0, 5)) {
-        lines.push(`  - (${p.vezes}x) ${p.texto}`);
-      }
-    }
-
-    if (insights.maisCurtidos.length) {
-      lines.push("- Comentários mais curtidos:");
-      for (const c of insights.maisCurtidos.slice(0, 3)) {
-        lines.push(`  - (${c.curtidas ?? 0} likes) ${c.texto}`);
-      }
-    }
-
-    if (insights.confusao.length) {
-      lines.push("- Dúvidas/confusão do público:");
-      for (const c of insights.confusao.slice(0, 3)) lines.push(`  - "${c}"`);
-    }
-    lines.push("");
-  }
-
-  lines.push("CONTEXTO DO VÍDEO:");
-  if (analysis) {
-    lines.push(`- Resumo: ${analysis.sceneSummary}`);
-    if (analysis.work?.title) lines.push(`- Obra identificada: ${analysis.work.title}`);
-    if (analysis.work?.mediaType) lines.push(`- Tipo: ${analysis.work.mediaType}`);
-    if (analysis.conflict) lines.push(`- Conflito: ${analysis.conflict}`);
-    if (analysis.withhold) lines.push(`- Segredo/gancho: ${analysis.withhold}`);
-  } else {
-    lines.push("- Sem análise do vídeo disponível.");
   }
 
   return untrusted(lines.join("\n"));

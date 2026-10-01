@@ -16,14 +16,17 @@ Companheiros deste documento:
 
 ## 1. O que é o projeto
 
-Duas fases de trabalho sobre cortes curtos de filmes e séries:
+Três fases de trabalho sobre cortes curtos de filmes e séries:
 
 1. **Análise (a "Fila", página inicial).** Importa vídeos em lote, analisa cada
    um (áudio, texto na tela, cena, comentários do post) e sugere textos-gancho
    para aparecer **acima** do vídeo.
 2. **Edição (`/editor`).** Os vídeos analisados são promovidos para a edição,
-   onde recebem recorte, template (fundo, logo) e saem exportados em MP4 pronto
-   para Reels e TikTok.
+   onde recebem recorte, template (fundo, logo), texto, efeitos e saem
+   exportados em MP4 pronto para Reels e TikTok.
+3. **Exportações (`/exports`).** Os vídeos prontos, num feed vertical como o do
+   celular, com tudo que é preciso para publicar — CTA, hashtags, legendas —
+   em campos com botão de copiar.
 
 Neste projeto, **"CTA" significa o texto-gancho exibido sobre o vídeo**, não uma
 chamada para clicar em um botão.
@@ -43,7 +46,7 @@ para as duas.
 | Sistema | Windows 11, Node.js v24, FFmpeg 9.0.1 |
 | Banco | SQLite em `data/short-cta-ai.db` |
 | Vídeos | 98, todos com link de origem identificado |
-| Exportados | `data/output/` (fora do git) |
+| Exportados | `data/output/` por padrão; a pasta é configurável em Configurações (fora do git) |
 | Assets de template | `data/templates/` (fora do git) |
 | Repositório | `github.com/handson00/short-cta-ai`, branch `master` |
 
@@ -81,7 +84,7 @@ Senha de acesso: `APP_PASSWORD` no `.env.local`.
 | `npm run backfill:source` | Recalcula plataforma/ID/link dos vídeos já importados |
 | `npm run mock:ghostcli` | Sobe um servidor falso da API, para rodar sem credencial |
 | `npm run worker` | Worker de análise em processo separado (exige `WORKER_IN_PROCESS=false`) |
-| `npm test` | 304 testes |
+| `npm test` | 461 testes |
 | `npm run typecheck` | `tsc --noEmit` |
 
 ### Armadilhas do ambiente — cada uma já custou horas
@@ -121,24 +124,32 @@ Verificado de ponta a ponta, com vídeos reais:
 
 - Importação em lote, validação por conteúdo, limite de tamanho e duração,
   dedupe por hash SHA-256.
-- Fila persistente com lease e heartbeat, concorrência, cancelamento, nova
-  tentativa e retomada após reinício.
+- Fila persistente com lease e heartbeat, cancelamento, nova tentativa e
+  retomada após reinício. Duas pistas (HISTORICO §27): a que transcreve
+  ("Transcrevendo em paralelo", padrão 2) e a de "Gerar CTAs" ("Gerando CTAs
+  em paralelo", padrão 3).
 - FFmpeg/FFprobe: metadados, miniatura, áudio, frames escolhidos conforme a
   duração real, com descarte de frames quase idênticos.
-- **OCR e detecção do CTA fixo do vídeo.** Os 98 vídeos têm análise visual
-  feita depois da correção do OCR; 65 tiveram o CTA fixo detectado (64 com
-  confiança alta). O fluxo completo job → `runner.ts` → banco → interface está
+- **OCR e detecção do CTA fixo do vídeo.** Os 98 vídeos do acervo de então
+  tiveram análise visual feita depois da correção do OCR; 65 tiveram o CTA
+  fixo detectado (64 com confiança alta). Em 2026-09-29 o usuário apagou 92
+  deles pela tela; o acervo atual está no §5.2. O fluxo completo job → `runner.ts` → banco → interface está
   exercitado.
-- **Transcrição local (`faster-whisper`)**, ligada desde 2026-09-28. Ver §5.2
-  sobre os vídeos que ainda precisam ser reanalisados.
-- **Geração de CTAs pelo GhostCLI contra a API real** (`https://ghostcli.dev/v1`,
-  modelo `claude-sonnet-5`): ~670 chamadas registradas em `ai_request_logs`,
-  1 erro. Contrato de saída validado no backend, uma tentativa de correção.
+- **Transcrição local (`faster-whisper`)**, ligada desde 2026-09-28; na GPU
+  (RTX 4050, `FASTER_WHISPER_DEVICE=auto`) desde 2026-09-29, com beam 1 e o OCR
+  rodando junto. Ver §5.2.
+- **Dois provedores de IA, à escolha em Configurações** (HISTORICO §28, §32):
+  - **GhostCLI** (pago): ~950 chamadas registradas em `ai_request_logs`.
+  - **Google Gemini** (plano gratuito): em uso desde 2026-09-30 — 38 chamadas
+    bem-sucedidas, 9 reaproveitadas, 7 erros (5 de sobrecarga 503). Análise e
+    geração em ~3,5 s cada. O **modelo reserva** entra quando o escolhido está
+    sobrecarregado; o raciocínio vai em nível baixo, que é o que deixa rápido.
+  - O sistema **nunca troca de provedor sozinho**: falhou, mostra o erro.
 - Detecção de origem pelo nome do arquivo (§6).
-- Comentários do post recebidos pela extensão do Chrome (95 vídeos com
-  comentários), CTA a partir de comentários, kit de publicação e hashtags. A
-  fila automática de captura foi corrigida em 2026-09-29 e ainda não rodou de
-  verdade — ver §10.
+- **Comentários do post recebidos pela extensão do Chrome**: 98 vídeos,
+  **26.704 comentários**. A fila automática passou a funcionar depois de o
+  usuário recarregar a extensão em 2026-09-30 — os 98 pedidos estão `done`
+  (§10). Alimentam CTA por comentários, kit de publicação e hashtags.
 - Exportação CSV/JSON com escape e proteção contra injeção de fórmula.
 
 **Edição (`/editor`)** — detalhes em [`video-editor/`](./video-editor/)
@@ -151,10 +162,29 @@ Verificado de ponta a ponta, com vídeos reais:
   regra da Fila, com texto próprio opcional. O navegador desenha a camada, a
   mesma do preview.
 - **Áudio**: original, mudo, substituir pela música ou misturar, com volumes.
-- Aba **Preview** com a mesma composição que a exportação produz.
+- **Efeitos por vídeo** (aba Efeitos): espelhar, cortar início/fim, realçar
+  cores, velocidade, zoom leve e melhorar áudio (−14 LUFS). Aplicáveis a um
+  vídeo, à seleção ou a todos. Medidos com FFmpeg real (HISTORICO §30).
+- Aba **Preview** com a mesma composição que a exportação produz, com som.
 - **Exportação em massa em fila**: 2 em paralelo com encoder de GPU, progresso
   por vídeo e do lote, cancelamento, retomada após reinício. Saída H.264 High
-  1080×1920 30 fps, AAC, cor convertida para BT.709, `+faststart`.
+  1080×1920 30 fps, AAC, cor convertida para BT.709, `+faststart`. Botão verde
+  numa barra que acompanha a rolagem.
+
+**Exportações (`/exports`)**
+
+- Feed vertical 9:16 como o do celular: arrastar, rolar ou setas para trocar de
+  vídeo; os dados ao lado acompanham. O MP4 é servido pelo id do job, com
+  suporte a `Range`.
+- Por vídeo, com botão de copiar: CTA, hashtags, legenda em português (kit),
+  legenda em japonês, resumo, enredo e transcrição.
+- **Hashtags por IA** (2 por vídeo, no vídeo aberto ou em todos): conferido em
+  2026-09-30 — num corte de viagem no tempo saíram `#maquinadotempo` e
+  `#ficcaocientifica`; num de atirador, `#atiradordeelite` e `#suspense`.
+  ~1,3 s por vídeo. Hashtag de volume é recusada pelo validador.
+- **Legenda em japonês** aberta pela hashtag fixa, ligável em Configurações.
+  Conferida em 2026-09-30: saiu no formato pedido (gancho + emoji, corpo,
+  convite a ver até o fim), ~1,2 s por vídeo.
 
 ---
 
@@ -186,7 +216,21 @@ não prova nada sobre ele.
    melhor gancho com pontuação ≥ 6. Persistência sozinha nunca classifica como
    marca d'água: é justamente o que define o CTA fixo.
 
-### 5.2 Transcrição — corrigida em 2026-09-28; 93 vídeos por reanalisar
+### 5.2 Transcrição — corrigida em 2026-09-28; acelerada em 2026-09-29
+
+**Situação atual (conferida no banco em 2026-09-29, fim do dia):** 7 vídeos,
+**todos com fala transcrita, nenhum com a falha antiga**. Os 92 que tinham a
+falha gravada foram apagados pelo usuário pela tela (confirmado por ele) — a
+pendência de reanalisá-los deixou de existir.
+
+**Velocidade (HISTORICO §27):** na GPU, ~10,5 s para 107 s de áudio (53 s na
+CPU). Requisitos no Python de `FASTER_WHISPER_PYTHON`: `faster-whisper`,
+`nvidia-cublas-cu12` e `nvidia-cudnn-cu12==9.*`. Sem as bibliotecas CUDA,
+`auto` cai para a CPU sozinho — mais lento, mesma fala. Se a GPU sumir (driver,
+outra máquina), a transcrição continua funcionando.
+
+Histórico do defeito de 2026-09-28:
+
 
 `FASTER_WHISPER_PYTHON` apontava para uma pasta inexistente (um dígito errado
 no nome) e, mesmo corrigida, aquele Python não tinha o pacote. O certo é o
@@ -196,10 +240,8 @@ O defeito ficou escondido porque o painel de transcrição mostrava "Sem fala
 compreensível" também quando o **provedor falhava** — o motivo real estava
 gravado em `transcripts.warnings_json`. O painel agora mostra o motivo.
 
-**Pendente, decisão do usuário:** 93 vídeos têm gravada a falha de transcrição
-(nenhum deles é vídeo mudo de verdade). A IA gerou os CTAs deles sem o diálogo.
-Só melhoram com "Analisar novamente", que consome chamadas pagas do GhostCLI e
-~1–2 min de CPU por vídeo (Whisper `small`).
+Na época, 93 vídeos ficaram com a falha gravada e CTAs gerados sem o diálogo.
+Todos saíram do acervo em 2026-09-29.
 
 ### 5.3 Captura de metadados do Instagram exige token
 
@@ -276,24 +318,31 @@ src/
       editor/           rotas do módulo de edição
     page.tsx            Fila (Library)
     editor/             módulo de edição
+    exports/            página de Exportações (feed + dados para publicar)
     video/[id]/         página de detalhe
     settings/ style/ usage/
   components/
     Library.tsx         grade, upload, filtros, seleção, "Enviar para edição"
     PreviewPanel.tsx    painel lateral da Fila
     VideoDetailView.tsx página /video/[id]
+    ExportsPanel.tsx    feed vertical + dados com botão de copiar
     editor/             EditorShell, TemplatePanel, CropOverlay,
-                        CompositionPreview, ExportQueuePanel
+                        CompositionPreview, ExportQueuePanel, EffectsPanel,
+                        CtaPicker, SourceProfilePanel
   lib/
     source.ts           detecção de plataforma e formação de link
     queue.ts            fila de análise + worker
     repo.ts             acesso ao banco (análise)
     editorRepo.ts       acesso ao banco (edição)
     schema.ts           DDL (fonte de verdade do schema)
-    pipeline/           runner, detecção de CTA, validação da saída da IA
-    providers/          ai (GhostCLI), vision (Tesseract), transcription, search
+    settings.ts         configurações + perfil do provedor de IA em uso
+    pipeline/           runner, detecção de CTA, validação da saída da IA,
+                        aiCache, hashtagRank, speechBasis
+    providers/          ai (GhostCLI e Gemini pelo mesmo cliente),
+                        vision (Tesseract), transcription, search
     editor/             crop, motion (Smart Crop), template, filterGraph,
-                        exportPreset, export, exportQueue, encoder
+                        exportPreset, export, exportQueue, encoder, effects,
+                        outputDir, profile, ctaOptions
 ```
 
 ---
@@ -303,30 +352,83 @@ src/
 1. `git status` — confirme que a árvore está limpa antes de mexer em qualquer
    coisa.
 2. `npm run doctor` — veja o ambiente pelos olhos da aplicação.
-3. `npm test` — devem passar 304/304.
+3. `npm test` — devem passar 461/461.
 4. Os comandos rodam direto no Windows (PowerShell): dá para rodar build,
    testes e o servidor daqui.
 5. Pendências por ordem de valor:
-   - **Recarregar a extensão** (versão 1.1.0) em `chrome://extensions` e
-     confirmar que a fila automática consome os 5 pedidos que ficaram abertos
-     (§10). A correção da extensão não pôde ser testada num navegador.
-   - **Reanalisar os 93 vídeos sem transcrição** (§5.2) — decisão do usuário,
-     porque custa chamadas pagas.
-   - **Conferir na tela a Fase 10 e a 10.1** do editor: desenho do texto (fonte,
-     emoji, quebra de linha), o campo de texto na seção "Texto (CTA)", o
-     salvamento automático e uma exportação com texto e música disparada pela
-     interface. O lado do FFmpeg foi medido; o navegador, não.
-   - **Editor, Fase 9** (perfis de origem) e o proxy da Fase 6 — ver
-     [`video-editor/IMPLEMENTATION_PLAN.md`](./video-editor/IMPLEMENTATION_PLAN.md).
+   - **Commitar.** Nada desde `c59d36a` (2026-09-29 11:36) foi para o git:
+     são as entregas dos §23 a §37, mais de 70 arquivos. É a pendência mais
+     cara — todo o trabalho de dois dias está só no disco.
+   - **Conferir na tela** o que foi entregue em 2026-09-30 e não teve
+     conferência visual: a aba Efeitos, o feed de Exportações (o gesto de
+     arrastar), o botão "Outro CTA", os perfis de origem (Fase 9) e o som no
+     preview do Editor.
+   - **Dois defeitos conhecidos da extensão** (§10): o `content.js` captura
+     sozinho em toda página de vídeo, inclusive nas abas que a fila abre
+     (captura em dobro), e nada na tela mostra que a extensão parou de
+     consultar a fila.
    - **Corrigir o endereço do `origin`** (§5.4) para o `git push` funcionar
      sem a URL completa.
+   - O proxy da Fase 6 do editor e a Fase 2 do ROADMAP foram **adiados pelo
+     usuário** em 2026-09-29 — ver
+     [`video-editor/IMPLEMENTATION_PLAN.md`](./video-editor/IMPLEMENTATION_PLAN.md).
 
-### Onde a última sessão parou (2026-09-29)
+### Onde a última sessão parou (2026-09-30, fim do dia)
 
-Editor com as Fases 0–8, 8.1, 10 e 10.1 prontas e tudo commitado. A última
-entrega foi o texto do CTA editável dentro da seção "Texto (CTA)" do template,
-com texto e template salvos sozinhos e a aba Preview em tempo real
-(`HISTORICO.md` §21 e §22). Nada disso foi visto funcionando na tela ainda.
+Um dia inteiro de entregas, **todas sem commit**. Em ordem, com o que o banco
+prova de cada uma (HISTORICO §28 a §37):
+
+| Entrega | Estado |
+| --- | --- |
+| **Gemini como 2º provedor** (§28, §32) | ✅ em uso: 38 chamadas ok, 9 reaproveitadas, 7 erros |
+| **Modelo reserva + raciocínio baixo** (§32) | ✅ análise e geração em ~3,5 s |
+| **Modelo recomendado por etapa** (§32) | ✅ o Básico é o sugerido nas duas |
+| **"Outro CTA" no editor** (§29) | ⚠️ tela não conferida |
+| **Aba Efeitos** (§30) | ⚠️ medido no FFmpeg; tela não conferida; **98 vídeos já têm efeitos** |
+| **Painel de preview acompanha a rolagem** (§31) | ⚠️ tela não conferida |
+| **Som no preview** (§33, §36) | ⚠️ tela não conferida — era `muted` como atributo no React |
+| **Barra de exportação fixa** (§34) | ⚠️ tela não conferida; **4 exportações concluídas** |
+| **Pasta de saída configurável** (§35) | ⚠️ ainda não configurada pelo usuário |
+| **Página `/exports` em feed** (§35) | ⚠️ gesto no navegador não conferido |
+| **Hashtags por IA** (§36) | ✅ geradas em 2 vídeos, com boa pontaria |
+| **Legenda em japonês** (§37) | ✅ gerada em 2 vídeos, no formato pedido |
+
+**Em andamento quando a sessão terminou:** um "Gerar CTAs" em lote com o
+Gemini — 13 concluídos, 1 gerando, **84 ainda na fila**. Se o servidor for
+reiniciado, eles voltam para a fila sozinhos (lease), mas vale conferir.
+
+**Resolvido:** a captura de comentários em massa. Era a extensão antiga no
+Chrome; o usuário recarregou e os **98 pedidos foram atendidos — 26.704
+comentários**.
+
+**Em aberto:** os dois primeiros MP4 exportados (19:03) sumiram de
+`data/output` sem que nada no código os apague. Perguntado ao usuário, sem
+resposta ainda. Os 4 jobs seguintes estão com arquivo no lugar.
+
+### Antes disso (2026-09-29, noite)
+
+**Análise mais rápida (HISTORICO §27):** beam 1, OCR junto com a transcrição,
+frames/OCR em paralelo e pista própria para "Gerar CTAs" — parte local 84,5 →
+58,6 s. Transcrição na GPU (RTX 4050, `FASTER_WHISPER_DEVICE=auto`, bibliotecas
+CUDA instaladas pelo pip): 5× mais rápida que na CPU. Buildado e reiniciado;
+não commitado.
+
+**IA sob demanda (HISTORICO §26):** a importação não chama mais a IA — o vídeo fica
+"Aguardando CTA" até o usuário selecionar e clicar "Gerar CTAs". Hashtags saem sem
+IA (as 2 mais relevantes entre as capturadas). Extensão 1.1.1 precisa ser recarregada.
+
+### Antes disso (2026-09-29, tarde)
+
+Duas entregas, **não commitadas e não buildadas**, com typecheck e 345/345
+testes limpos:
+
+- **Fase 9 do editor — perfis de origem** (`HISTORICO.md` §23).
+- **CTA a partir do enredo pela fala** (§24): a geração passou a ler a
+  transcrição, não só o resumo. (Na época só 6 vídeos tinham fala; os outros
+  92 foram apagados depois pelo usuário.)
+
+Antes delas: Fases 0–8, 8.1, 10 e 10.1 commitadas em `c59d36a`, sem conferência
+na tela.
 
 Uma regra que este projeto pagou caro para aprender: quando um diagnóstico diz
 que está tudo bem e o sistema diz que não, desconfie do diagnóstico — ele

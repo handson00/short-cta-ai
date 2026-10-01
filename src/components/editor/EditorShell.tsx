@@ -7,9 +7,15 @@ import { aspectRatioStyle, parseRatio } from "@/lib/aspect";
 import { clampRect, FULL_FRAME, type NormalizedRect } from "@/lib/editor/crop";
 import CropOverlay from "./CropOverlay";
 import CompositionPreview from "./CompositionPreview";
-import ExportQueuePanel from "./ExportQueuePanel";
+import ExportQueuePanel, { type ExportSummary } from "./ExportQueuePanel";
 import { renderTextLayerPng } from "./textCanvas";
 import type { TextLayout } from "@/lib/editor/textLayout";
+import SourceProfilePanel, { type ProfileView } from "./SourceProfilePanel";
+import { matchProfile } from "@/lib/editor/profile";
+import CtaPicker from "./CtaPicker";
+import EffectsPanel, { type EffectsScope } from "./EffectsPanel";
+import { countEffects, type EditorEffects } from "@/lib/editor/effects";
+import type { CtaOption } from "@/lib/editor/ctaOptions";
 
 /** Vídeos por pedido de detecção: o suficiente para mostrar progresso. */
 const DETECT_CHUNK = 10;
@@ -33,6 +39,19 @@ interface LibraryVideo {
   hasAnalysis: boolean;
   status: string;
   templateId: string | null;
+  /** Página de origem, base do perfil; nula = não identificada pelo nome do arquivo. */
+  originKey: string | null;
+  originLabel: string | null;
+  /** CTAs gerados para o vídeo, recomendado primeiro. */
+  ctaOptions: CtaOption[];
+}
+
+/** Relatório de `/api/editor/profiles/apply`. */
+interface ApplyReport {
+  applied: string[];
+  skipped: Array<{ videoId: string; reason: string }>;
+  divergent: Array<{ videoId: string; iou: number }>;
+  otherPage: string[];
 }
 
 /** O texto que vai sobre o vídeo: o próprio do editor, senão o CTA da análise. */
@@ -67,6 +86,8 @@ export default function EditorShell() {
   const [exporting, setExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState<string | null>(null);
   const [queueRefresh, setQueueRefresh] = useState(0);
+  /** Andamento do lote, vindo da fila: a barra de ações mostra sem refazer a conta. */
+  const [exportSummary, setExportSummary] = useState<ExportSummary | null>(null);
   // Rascunho do texto do vídeo em preview, salvo sozinho. `textDraftFor` diz de
   // qual vídeo ele é: ao trocar de vídeo há um render em que o rascunho ainda
   // é o do anterior, e sem essa marca o autosave o gravaria no vídeo novo.
@@ -83,6 +104,8 @@ export default function EditorShell() {
   const [previewTextLayout, setPreviewTextLayout] = useState<TextLayout | null>(null);
   const [templates, setTemplates] = useState<EditorTemplate[]>([]);
   const [activeTemplateId, setActiveTemplateId] = useState<string | null>(null);
+  const [profiles, setProfiles] = useState<ProfileView[]>([]);
+  const [profileBusy, setProfileBusy] = useState(false);
   const [detection, setDetection] = useState<{
     videoId: string;
     confidence: number;
@@ -90,6 +113,11 @@ export default function EditorShell() {
     hasBorder: boolean;
   } | null>(null);
   const [notice, setNotice] = useState<{ kind: "ok" | "erro"; text: string } | null>(null);
+
+  // Efeitos por vídeo (aba Efeitos, na coluna do template).
+  const [effectsMap, setEffectsMap] = useState<Record<string, EditorEffects>>({});
+  const [effectsBusy, setEffectsBusy] = useState(false);
+  const [leftTab, setLeftTab] = useState<"template" | "efeitos">("template");
 
   useEffect(() => {
     Promise.all([
@@ -100,12 +128,16 @@ export default function EditorShell() {
       fetch("/api/editor/library").then((r) => (r.ok ? r.json() : { videos: [] })),
       fetch("/api/editor/crop").then((r) => (r.ok ? r.json() : { crops: {} })),
       fetch("/api/editor/templates").then((r) => (r.ok ? r.json() : { templates: [] })),
+      fetch("/api/editor/profiles").then((r) => (r.ok ? r.json() : { profiles: [] })),
+      fetch("/api/editor/effects").then((r) => (r.ok ? r.json() : { effects: {} })),
     ])
-      .then(([statusData, libraryData, cropData, templateData]) => {
+      .then(([statusData, libraryData, cropData, templateData, profileData, effectsData]) => {
         setStatus(statusData);
         setLibraryVideos(libraryData.videos ?? []);
         setCrops(cropData.crops ?? {});
         setTemplates(templateData.templates ?? []);
+        setProfiles(profileData.profiles ?? []);
+        setEffectsMap(effectsData.effects ?? {});
         setLoading(false);
       })
       .catch((err) => {
@@ -410,6 +442,9 @@ export default function EditorShell() {
           (avisos.length > 0 ? avisos.join(" ") : "Pode continuar editando."),
       });
       setQueueRefresh((n) => n + 1);
+      // O painel da fila fica no topo da página; sem isto, quem clicou em
+      // Exportar lá embaixo não veria o progresso começar.
+      scrollToQueue();
     } catch (err) {
       setNotice({
         kind: "erro",
@@ -419,6 +454,14 @@ export default function EditorShell() {
       setExporting(false);
       setExportProgress(null);
     }
+  }
+
+  /** Leva a tela até o painel da fila de exportação. */
+  function scrollToQueue() {
+    // Espera o painel existir: ele só aparece quando há job na fila.
+    setTimeout(() => {
+      document.getElementById("fila-de-exportacao")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 150);
   }
 
   /** Grava (ou, vazio, apaga) o texto próprio do vídeo. Não mexe na escolha da Fila. */
@@ -462,6 +505,223 @@ export default function EditorShell() {
         text: err instanceof Error ? err.message : "Falha ao remover o vídeo da edição.",
       });
     }
+  }
+
+  // ------------------------------- Efeitos ------------------------------------
+
+  /**
+   * Grava os efeitos no escopo e reflete na tela SÓ o que o servidor confirmou
+   * (`videoIds` da resposta) — em "Todos", quem decide a lista é o servidor.
+   */
+  async function applyEffects(scope: EffectsScope, effects: EditorEffects) {
+    const body =
+      scope === "todos"
+        ? { scope: "all", effects }
+        : { scope: "videos", videoIds: scope === "este" ? (previewVideoId ? [previewVideoId] : []) : [...selectedIds], effects };
+    if (body.scope === "videos" && (body as { videoIds: string[] }).videoIds.length === 0) return;
+
+    if (scope !== "este") setEffectsBusy(true);
+    try {
+      const res = await fetch("/api/editor/effects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = (await res.json().catch(() => ({}))) as { videoIds?: string[]; effects?: EditorEffects; error?: string };
+      if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+      const saved = data.effects ?? effects;
+      const on = countEffects(saved) > 0;
+      setEffectsMap((prev) => {
+        const next = { ...prev };
+        for (const id of data.videoIds ?? []) {
+          if (on) next[id] = saved;
+          else delete next[id];
+        }
+        return next;
+      });
+      if (scope !== "este") {
+        setNotice({
+          kind: "ok",
+          text: on
+            ? `Efeitos aplicados em ${data.videoIds?.length ?? 0} vídeo(s): ${countEffects(saved)} ligado(s).`
+            : `Efeitos removidos de ${data.videoIds?.length ?? 0} vídeo(s).`,
+        });
+      }
+    } catch (err) {
+      setNotice({ kind: "erro", text: `Falha ao gravar os efeitos: ${err instanceof Error ? err.message : err}` });
+    } finally {
+      setEffectsBusy(false);
+    }
+  }
+
+  // ------------------------- Perfil de origem (Fase 9) -------------------------
+
+  async function reloadProfiles() {
+    const res = await fetch("/api/editor/profiles");
+    if (res.ok) setProfiles(((await res.json()).profiles ?? []) as ProfileView[]);
+  }
+
+  /** Aplica e já reflete na tela o que o servidor gravou — só os `applied`. */
+  async function postApply(profile: ProfileView, videoIds: string[], replaceManual: boolean): Promise<ApplyReport> {
+    const res = await fetch("/api/editor/profiles/apply", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ profileId: profile.id, videoIds, replaceManual }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+    const report = data as ApplyReport;
+    setCrops((prev) => {
+      const next = { ...prev };
+      for (const id of report.applied) {
+        next[id] = {
+          x: profile.cropX,
+          y: profile.cropY,
+          width: profile.cropW,
+          height: profile.cropH,
+          normalized: true,
+          source: "profile",
+          profileId: profile.id,
+        };
+      }
+      return next;
+    });
+    return report;
+  }
+
+  /**
+   * Cada número dito à parte: "30 aplicados" esconderia que 5 ficaram de fora
+   * por proporção e 2 tinham uma detecção que discorda do perfil.
+   */
+  function describeApply(reports: ApplyReport[], unmatched: Array<{ videoId: string; reason: string }> = []) {
+    const nameOf = (id: string) => libraryVideos.find((v) => v.id === id)?.originalName ?? id;
+    const applied = reports.reduce((n, r) => n + r.applied.length, 0);
+    const skipped = [...unmatched, ...reports.flatMap((r) => r.skipped)];
+    const divergent = reports.flatMap((r) => r.divergent);
+    const otherPage = reports.reduce((n, r) => n + r.otherPage.length, 0);
+
+    const porMotivo = new Map<string, number>();
+    for (const s of skipped) porMotivo.set(s.reason, (porMotivo.get(s.reason) ?? 0) + 1);
+
+    const partes = [`Perfil aplicado a ${applied} vídeo(s).`];
+    for (const [motivo, n] of porMotivo) partes.push(`${n} ficaram de fora: ${motivo}`);
+    if (divergent.length > 0) {
+      const nomes = divergent.slice(0, 3).map((d) => nameOf(d.videoId)).join(", ");
+      partes.push(
+        `${divergent.length} tinham uma detecção automática com outra moldura — revise: ${nomes}${divergent.length > 3 ? "…" : ""}.`,
+      );
+    }
+    if (otherPage > 0) partes.push(`${otherPage} são de outra página.`);
+    const problema = skipped.length > 0 || divergent.length > 0 || otherPage > 0;
+    return { kind: (applied === 0 || problema ? "erro" : "ok") as "ok" | "erro", text: partes.join(" ") };
+  }
+
+  async function withProfileBusy(fn: () => Promise<void>, failure: string) {
+    setProfileBusy(true);
+    setNotice(null);
+    try {
+      await fn();
+    } catch (err) {
+      setNotice({ kind: "erro", text: err instanceof Error ? err.message : failure });
+    } finally {
+      setProfileBusy(false);
+    }
+  }
+
+  /** Um perfil escolhido, para os vídeos indicados. */
+  function applyProfile(profile: ProfileView, videoIds: string[], replaceManual: boolean) {
+    if (videoIds.length === 0) return;
+    void withProfileBusy(async () => {
+      const report = await postApply(profile, videoIds, replaceManual);
+      setNotice(describeApply([report]));
+      await reloadProfiles();
+    }, "Falha ao aplicar o perfil.");
+  }
+
+  /**
+   * Em lote, cada vídeo recebe o perfil da SUA página (spec §104, "detectar
+   * similaridade"): a seleção pode misturar páginas, e um perfil só para todos
+   * recortaria errado quem é de outra moldura. Quem não tem perfil que sirva
+   * fica de fora com o motivo.
+   */
+  function applyMatchedProfiles(videoIds: string[]) {
+    void withProfileBusy(async () => {
+      const grupos = new Map<string, { profile: ProfileView; ids: string[] }>();
+      const unmatched: Array<{ videoId: string; reason: string }> = [];
+      for (const id of videoIds) {
+        const v = libraryVideos.find((x) => x.id === id);
+        if (!v) continue;
+        const m = matchProfile(v, profiles);
+        if (!m.profile) {
+          unmatched.push({ videoId: id, reason: m.reason });
+          continue;
+        }
+        const g = grupos.get(m.profile.id) ?? { profile: m.profile as ProfileView, ids: [] };
+        g.ids.push(id);
+        grupos.set(m.profile.id, g);
+      }
+      const reports: ApplyReport[] = [];
+      for (const g of grupos.values()) reports.push(await postApply(g.profile, g.ids, false));
+      setNotice(describeApply(reports, unmatched));
+      await reloadProfiles();
+    }, "Falha ao aplicar os perfis.");
+  }
+
+  function saveNewProfile(name: string) {
+    if (!previewVideoId) return;
+    void withProfileBusy(async () => {
+      const res = await fetch("/api/editor/profiles", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ videoId: previewVideoId, crop: rect, name }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+      setProfiles((prev) => [data.profile as ProfileView, ...prev]);
+      setNotice({
+        kind: "ok",
+        text: `Perfil "${data.profile.name}" salvo. Para usá-lo, selecione os vídeos da página e clique em "Perfil da página".`,
+      });
+    }, "Falha ao salvar o perfil.");
+  }
+
+  function updateProfileCrop(profile: ProfileView) {
+    if (!previewVideoId) return;
+    void withProfileBusy(async () => {
+      const res = await fetch("/api/editor/profiles", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: profile.id, videoId: previewVideoId, crop: rect }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+      setProfiles((prev) => prev.map((p) => (p.id === profile.id ? (data.profile as ProfileView) : p)));
+      // Dizer que os vídeos antigos não mudaram: é o que o usuário esperaria
+      // descobrir só na exportação.
+      setNotice({
+        kind: "ok",
+        text:
+          profile.videoCount > 0
+            ? `Perfil "${profile.name}" atualizado. Os ${profile.videoCount} vídeo(s) que já o receberam mantêm o recorte anterior; aplique de novo para trocar.`
+            : `Perfil "${profile.name}" atualizado.`,
+      });
+    }, "Falha ao atualizar o perfil.");
+  }
+
+  function deleteProfile(profile: ProfileView) {
+    void withProfileBusy(async () => {
+      const res = await fetch(`/api/editor/profiles?id=${encodeURIComponent(profile.id)}`, { method: "DELETE" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setProfiles((prev) => prev.filter((p) => p.id !== profile.id));
+      setCrops((prev) => {
+        const next = { ...prev };
+        for (const [id, c] of Object.entries(next)) {
+          if (c.profileId === profile.id) next[id] = { ...c, profileId: null };
+        }
+        return next;
+      });
+      setNotice({ kind: "ok", text: `Perfil "${profile.name}" excluído. Os vídeos mantêm o recorte que receberam.` });
+    }, "Falha ao excluir o perfil.");
   }
 
   async function applyCrop(videoIds: string[]) {
@@ -586,9 +846,45 @@ export default function EditorShell() {
         </div>
       )}
 
-      <ExportQueuePanel refreshKey={queueRefresh} />
+      <ExportQueuePanel refreshKey={queueRefresh} onSummary={setExportSummary} />
 
       <div className="flex gap-6">
+        <div className="w-[320px] shrink-0 space-y-2 self-start">
+          <div className="flex items-center gap-1 rounded-lg border border-ink-800 bg-ink-950/60 p-1">
+            {(
+              [
+                ["template", "Template"],
+                ["efeitos", "✨ Efeitos"],
+              ] as const
+            ).map(([tab, label]) => (
+              <button
+                key={tab}
+                onClick={() => setLeftTab(tab)}
+                className={`flex-1 rounded-md px-2 py-1 text-[11px] transition ${
+                  leftTab === tab ? "bg-accent/15 text-accent" : "text-ink-400 hover:text-ink-200"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {leftTab === "efeitos" && (
+            <EffectsPanel
+              video={
+                previewVideo
+                  ? { id: previewVideo.id, name: previewVideo.originalName, durationSeconds: previewVideo.durationSeconds }
+                  : null
+              }
+              videoEffects={previewVideo ? (effectsMap[previewVideo.id] ?? null) : null}
+              selectedCount={selectedIds.size}
+              totalCount={libraryVideos.length}
+              busy={effectsBusy}
+              onApply={applyEffects}
+            />
+          )}
+          {/* Escondido, não desmontado: o template tem salvamento automático
+              pendente, e desmontar no meio perderia a última alteração. */}
+          <div className={leftTab === "template" ? "" : "hidden"}>
         <TemplatePanel
           templates={templates}
           selectedId={activeTemplateId}
@@ -615,13 +911,17 @@ export default function EditorShell() {
           previewText={previewVideo && textDraftFor === previewVideo.id ? textDraft : null}
           previewLiveText={previewLiveText}
           previewPlaceholder={previewVideo?.ctaText ?? ""}
+          previewCtaOptions={previewVideo?.ctaOptions ?? []}
           onPreviewTextChange={setTextDraft}
           onDraftChange={onDraftChange}
           onSaveStateChange={setTemplateSaveState}
           previewVideoWidth={previewVideo?.width ?? 1080}
           previewVideoHeight={previewVideo?.height ?? 1920}
           assignCount={selectedIds.size}
+          previewEffects={previewVideo ? (effectsMap[previewVideo.id] ?? null) : null}
         />
+          </div>
+        </div>
         <section className="min-w-0 flex-1 rounded-xl border border-ink-800 bg-ink-900/50 p-5">
           <div className="mb-4 flex items-center justify-between">
             <h2 className="text-sm font-semibold uppercase tracking-wider text-ink-400">
@@ -721,6 +1021,7 @@ export default function EditorShell() {
                           {formatDuration(v.durationSeconds)}
                           {v.width && v.height ? ` · ${v.width}×${v.height}` : ""}
                           {crops[v.id] ? " · Recorte personalizado" : ""}
+                          {countEffects(effectsMap[v.id]) > 0 ? ` · ✨ ${countEffects(effectsMap[v.id])} efeito(s)` : ""}
                         </p>
 
                         {videoText(v) && (
@@ -734,7 +1035,13 @@ export default function EditorShell() {
 
                         <div className="mt-2 flex flex-wrap gap-1 text-[10px]">
                           {crops[v.id] && (
-                            <span className="rounded bg-accent/20 px-1 py-0.5 text-accent">Recorte</span>
+                            <span className="rounded bg-accent/20 px-1 py-0.5 text-accent">
+                              {crops[v.id].source === "profile"
+                                ? "Recorte do perfil"
+                                : crops[v.id].source === "auto"
+                                  ? "Recorte auto"
+                                  : "Recorte"}
+                            </span>
                           )}
                           {v.templateId && (
                             <span className="rounded bg-accent/20 px-1 py-0.5 text-accent" title={templates.find((t) => t.id === v.templateId)?.name}>
@@ -773,12 +1080,39 @@ export default function EditorShell() {
             </div>
           )}
 
-          {selectedIds.size > 0 && (
-            <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-accent/30 bg-accent/10 px-4 py-3">
-              <span className="text-sm text-accent">
-                {selectedIds.size} selecionado(s). Ajuste o recorte ao lado e escolha onde aplicar.
-              </span>
-              <div className="flex gap-2">
+          {/* Fica colada no rodapé da janela: com 98 vídeos na lista, a barra
+              no fim da página exigia rolar tudo para achar o botão Exportar. */}
+          {(selectedIds.size > 0 || exportSummary?.busy) && (
+            <div className="sticky bottom-3 z-20 mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-accent/40 bg-ink-900/95 px-4 py-3 shadow-lg shadow-black/40 backdrop-blur">
+              <div className="flex min-w-0 flex-col gap-1">
+                <span className="text-sm text-accent">
+                  {selectedIds.size > 0
+                    ? `${selectedIds.size} selecionado(s) de ${libraryVideos.length}.`
+                    : "Nenhum vídeo selecionado."}
+                </span>
+                {exportSummary && (
+                  <a
+                    href="#fila-de-exportacao"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      scrollToQueue();
+                    }}
+                    className="text-[11px] text-ink-400 underline-offset-2 hover:text-ink-200 hover:underline"
+                  >
+                    {exportSummary.busy ? "Exportando" : "Exportação"}: {exportSummary.done} de {exportSummary.total}{" "}
+                    prontos · {exportSummary.overall}%
+                    {exportSummary.failed > 0 && ` · ${exportSummary.failed} falharam`} — ver detalhes
+                  </a>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={selectAll}
+                  disabled={exporting || detecting}
+                  className="rounded-lg border border-ink-700 px-3 py-1.5 text-xs text-ink-300 transition hover:border-accent/50 hover:text-accent disabled:opacity-50"
+                >
+                  {selectedIds.size === libraryVideos.length ? "Desmarcar todos" : `Selecionar todos (${libraryVideos.length})`}
+                </button>
                 <button
                   onClick={() => void detectBatch([...selectedIds])}
                   disabled={detecting || exporting}
@@ -791,9 +1125,22 @@ export default function EditorShell() {
                     : `✨ Detectar recorte (${selectedIds.size})`}
                 </button>
                 <button
+                  onClick={() => applyMatchedProfiles([...selectedIds])}
+                  disabled={detecting || exporting || profileBusy || profiles.length === 0}
+                  title={
+                    profiles.length === 0
+                      ? "Nenhum perfil salvo. Abra um vídeo, ajuste o recorte e clique em \"Salvar como perfil\"."
+                      : "Cada vídeo recebe o perfil da sua página e proporção. Recorte manual é mantido."
+                  }
+                  className="rounded-lg border border-accent/50 px-3 py-1.5 text-xs text-accent transition hover:bg-accent/10 disabled:opacity-50"
+                >
+                  {profileBusy ? "Aplicando perfil…" : `🧩 Perfil da página (${selectedIds.size})`}
+                </button>
+                <button
                   onClick={() => void exportSelected()}
-                  disabled={exporting || detecting}
-                  className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white transition hover:bg-accent/90 disabled:opacity-50"
+                  disabled={exporting || detecting || selectedIds.size === 0}
+                  title="Gera o arquivo final MP4 de cada vídeo selecionado, com recorte, template, texto e efeitos"
+                  className="rounded-lg bg-emerald-600 px-4 py-1.5 text-xs font-semibold text-white transition hover:bg-emerald-500 disabled:opacity-50"
                 >
                   {exporting ? (exportProgress ?? "Enviando para a fila…") : `⬇ Exportar ${selectedIds.size} vídeo(s)`}
                 </button>
@@ -803,7 +1150,11 @@ export default function EditorShell() {
         </section>
 
         {previewVideo && (
-          <aside className="w-[380px] shrink-0 space-y-4 self-start rounded-xl border border-ink-800 bg-ink-900/50 p-4">
+          // Acompanha a rolagem: a lista de vídeos é longa e o preview precisa
+          // continuar à vista enquanto se desce por ela. `top` desconta o
+          // cabeçalho fixo do app; mais alto que a tela, o painel rola por dentro.
+          <aside className="sticky top-[72px] max-h-[calc(100vh-88px)] w-[380px] shrink-0 space-y-4 self-start overflow-y-auto rounded-xl border border-ink-800 bg-ink-900/50 p-4">
+
             <div className="flex items-center gap-1 rounded-lg border border-ink-800 bg-ink-950/60 p-1">
               {(
                 [
@@ -872,6 +1223,7 @@ export default function EditorShell() {
                   displayHeight={440}
                   text={previewLiveText}
                   onTextLayout={setPreviewTextLayout}
+                  effects={effectsMap[previewVideo.id] ?? null}
                 />
                 <p className="text-center text-[10px] text-ink-500">
                   {previewTemplate.config.canvasWidth}×{previewTemplate.config.canvasHeight} ·{" "}
@@ -904,6 +1256,7 @@ export default function EditorShell() {
                       placeholder={previewVideo.ctaText ?? "Sem CTA na análise — escreva o texto deste vídeo."}
                       className="w-full resize-none rounded-md border border-ink-700 bg-ink-950/60 px-2 py-1.5 text-xs text-ink-200 focus:border-accent focus:outline-none"
                     />
+                    <CtaPicker options={previewVideo.ctaOptions ?? []} text={previewLiveText} onPick={setTextDraft} />
                     <p className="text-[10px] text-ink-500">
                       {draftOverride(previewVideo)
                         ? "Texto próprio deste vídeo. Não altera a escolha feita na Fila."
@@ -1018,6 +1371,29 @@ export default function EditorShell() {
                 Aplicar a todos ({libraryVideos.length})
               </button>
             </div>
+
+            <SourceProfilePanel
+              video={previewVideo}
+              crop={crops[previewVideo.id] ?? null}
+              profiles={profiles}
+              selectedCount={selectedIds.size}
+              busy={profileBusy || saving || detecting}
+              onLoad={(p) => {
+                setRect({ x: p.cropX, y: p.cropY, width: p.cropW, height: p.cropH });
+                setCropMode(true);
+                setPanelTab("recorte");
+                setDetection(null);
+                setNotice({
+                  kind: "ok",
+                  text: `Recorte de "${p.name}" carregado no editor, ainda não gravado. Ajuste se precisar e aplique.`,
+                });
+              }}
+              onApplyHere={(p) => applyProfile(p, [previewVideo.id], true)}
+              onApplySelected={(p) => applyProfile(p, [...selectedIds], false)}
+              onSaveNew={saveNewProfile}
+              onUpdate={updateProfileCrop}
+              onDelete={deleteProfile}
+            />
           </aside>
         )}
       </div>
