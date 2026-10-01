@@ -5,25 +5,31 @@ import { aiProvider } from "@/lib/providers/ai";
 import { rankHashtags } from "@/lib/pipeline/hashtagRank";
 import { AiError } from "@/lib/providers/ai/errors";
 import { getSettings } from "@/lib/settings";
+import type { PublishContext } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
-/** Quantas hashtags novas a IA gera por vídeo. */
+/** Quantas hashtags novas a IA gera por vídeo, em português. */
 const QUANTAS = 2;
 
 const schema = z.object({
   videoIds: z.array(z.string().min(1)).min(1).max(100),
-  /** Refazer num vídeo que já tem sugestão da IA. Sem isto, ele é pulado (não gasta chamada). */
+  /**
+   * `pt`: legenda em português + 2 hashtags (o botão principal).
+   * `ja`: legenda em japonês + 1 hashtag japonesa (o botão ao lado).
+   */
+  idioma: z.enum(["pt", "ja"]).default("pt"),
+  /** Refazer num vídeo que já tem. Sem isto, ele é pulado (não gasta chamada). */
   force: z.boolean().default(false),
 });
 
 /**
- * Gera hashtags novas com IA para os vídeos indicados.
+ * Gera o texto de publicação dos vídeos indicados: uma chamada por vídeo.
  *
- * Uma chamada paga (ou de cota, no Gemini) POR VÍDEO. Por isso: vídeo que já
- * tem sugestão é pulado, a menos que o usuário peça de novo; e o relatório diz
- * o que foi gerado, o que foi pulado e o que falhou — um lote pela metade não
- * pode parecer sucesso.
+ * Os dois idiomas são pedidos separados, porque são dois botões: quem quer só
+ * o português não paga pelo japonês. Vídeo que já tem o pacote daquele idioma
+ * é pulado, e o relatório diz o que foi gerado, pulado e o que falhou — um
+ * lote pela metade não pode parecer sucesso.
  */
 export async function POST(request: Request) {
   const denied = await requireAuth();
@@ -32,10 +38,14 @@ export async function POST(request: Request) {
   try {
     const parsed = schema.safeParse(await request.json());
     if (!parsed.success) return fail(parsed.error.issues[0]?.message ?? "Dados inválidos.", 422);
-    const { videoIds, force } = parsed.data;
-
+    const { videoIds, idioma, force } = parsed.data;
     const { publish } = getSettings();
-    const gerados: Array<{ videoId: string; hashtags: Array<{ tag: string; reason: string | null }> }> = [];
+
+    if (idioma === "ja" && !publish.japaneseCaption) {
+      return fail("A legenda em japonês está desligada em Configurações.", 409);
+    }
+
+    const gerados: string[] = [];
     const pulados: Array<{ videoId: string; reason: string }> = [];
     const falhas: Array<{ videoId: string; reason: string }> = [];
 
@@ -46,16 +56,13 @@ export async function POST(request: Request) {
         continue;
       }
 
-      const captured = repo.getVideoHashtags(videoId);
-      const temLegendaJp = repo.getJapaneseCaption(videoId) !== null;
-      // Pular só quando TUDO que seria gerado já existe: senão, ligar a legenda
-      // japonesa depois nunca geraria nada nos vídeos que já têm hashtags.
-      const faltaLegendaJp = publish.japaneseCaption && !temLegendaJp;
-      if (!force && (captured?.ia.length ?? 0) > 0 && !faltaLegendaJp) {
-        pulados.push({ videoId, reason: "Já tem hashtags da IA." });
+      const captions = repo.getCaptions(videoId);
+      if (!force && (idioma === "pt" ? captions.pt : captions.ja)) {
+        pulados.push({ videoId, reason: `Já tem a legenda em ${idioma === "pt" ? "português" : "japonês"}.` });
         continue;
       }
 
+      const captured = repo.getVideoHashtags(videoId);
       const analysis = repo.latestSceneAnalysis(videoId);
       const transcript = repo.getTranscript(videoId);
       const work = repo.getWork(videoId);
@@ -67,17 +74,7 @@ export async function POST(request: Request) {
         suggestions.find((s) => s.isRecommended)?.text ??
         null;
 
-      // As que o vídeo já usa: as recomendadas entre as capturadas e as que a
-      // IA já sugeriu antes. Vão no prompt e no validador, para não repetir.
-      const jaTem = [
-        ...rankHashtags(captured, { cta, plot: analysis?.plot ?? null, transcript: transcript?.text ?? null }).map(
-          (h) => h.tag,
-        ),
-        ...(captured?.doVideo ?? []),
-        ...(captured?.ia.map((h) => h.tag) ?? []),
-      ];
-
-      const contexto = {
+      const contexto: PublishContext = {
         cta,
         plot: analysis?.plot ?? null,
         sceneSummary: analysis?.sceneSummary ?? null,
@@ -87,36 +84,37 @@ export async function POST(request: Request) {
 
       try {
         const provider = aiProvider({ videoId });
-        let tags = captured?.ia ?? [];
-        if (force || tags.length === 0) {
-          tags = await provider.generateHashtags(contexto, jaTem, QUANTAS);
-          repo.saveAiHashtags(videoId, tags);
+
+        if (idioma === "pt") {
+          // As que o vídeo já usa vão no prompt e no validador, para não repetir.
+          const jaTem = [
+            ...rankHashtags(captured, { cta, plot: contexto.plot, transcript: transcript?.text ?? null }).map(
+              (h) => h.tag,
+            ),
+            ...(captured?.doVideo ?? []),
+            ...(captured?.ia.map((h) => h.tag) ?? []),
+          ];
+          const pack = await provider.generatePublishPack(contexto, jaTem, QUANTAS);
+          repo.saveAiHashtags(videoId, pack.hashtags, "pt");
+          if (pack.caption) repo.saveCaptions(videoId, { pt: pack.caption });
+        } else {
+          const pack = await provider.generateJapanesePack(contexto, publish.japaneseHashtag);
+          repo.saveCaptions(videoId, { ja: pack.caption, jaHashtag: publish.japaneseHashtag });
+          if (pack.hashtag) repo.saveAiHashtags(videoId, [pack.hashtag], "ja");
         }
 
-        if (publish.japaneseCaption && (force || !temLegendaJp)) {
-          const caption = await provider.generateJapaneseCaption(contexto, publish.japaneseHashtag);
-          repo.saveJapaneseCaption(videoId, caption, publish.japaneseHashtag);
-        }
-
-        gerados.push({ videoId, hashtags: tags });
+        gerados.push(videoId);
       } catch (err) {
         const message = err instanceof AiError ? err.message : (err as Error).message;
         falhas.push({ videoId, reason: message });
-        // Cota ou credencial: insistir nos outros só queimaria a cota à toa.
+        // Cota ou credencial: insistir nos outros só queimaria o resto da cota.
         if (err instanceof AiError && ["quota_exhausted", "auth_error", "not_configured"].includes(err.code)) {
           break;
         }
       }
     }
 
-    return json({
-      ok: true,
-      gerados,
-      pulados,
-      falhas,
-      porVideo: QUANTAS,
-      comLegendaJaponesa: publish.japaneseCaption,
-    });
+    return json({ ok: true, idioma, gerados, pulados, falhas, porVideo: idioma === "pt" ? QUANTAS : 1 });
   } catch (err) {
     return handleError(err);
   }

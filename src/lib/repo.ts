@@ -1110,32 +1110,59 @@ export function saveVideoHashtags(
  * usou, outra é o que a IA sugeriu. Misturar as duas faria a tela apresentar
  * sugestão como fato observado.
  */
-export function saveAiHashtags(videoId: string, tags: Array<{ tag: string; reason: string | null }>): void {
+export function saveAiHashtags(
+  videoId: string,
+  tags: Array<{ tag: string; reason: string | null }>,
+  idioma: "pt" | "ja" = "pt",
+): void {
+  const coluna = idioma === "ja" ? "ia_ja_json" : "ia_json";
   db()
     .prepare(
-      `INSERT INTO video_hashtags (video_id, do_video_json, nos_comentarios_json, todas_json, ia_json, captured_at)
+      `INSERT INTO video_hashtags (video_id, do_video_json, nos_comentarios_json, todas_json, ${coluna}, captured_at)
        VALUES (?, '[]', '[]', '[]', ?, ?)
-       ON CONFLICT(video_id) DO UPDATE SET ia_json = excluded.ia_json`,
+       ON CONFLICT(video_id) DO UPDATE SET ${coluna} = excluded.${coluna}`,
     )
     .run(videoId, JSON.stringify(tags), nowIso());
 }
 
-/** Legenda em japonês do vídeo, com a hashtag que a abriu. */
-export function saveJapaneseCaption(videoId: string, text: string, hashtag: string): void {
-  db()
-    .prepare(
-      `INSERT INTO video_jp_captions (video_id, text, hashtag, updated_at) VALUES (?, ?, ?, ?)
-       ON CONFLICT(video_id) DO UPDATE SET text = excluded.text, hashtag = excluded.hashtag,
-         updated_at = excluded.updated_at`,
-    )
-    .run(videoId, text, hashtag, nowIso());
+export interface VideoCaptions {
+  /** Legenda principal, em português. */
+  pt: string | null;
+  /** Legenda em japonês, quando gerada. */
+  ja: string | null;
+  /** A hashtag fixa que abriu a legenda japonesa. */
+  jaHashtag: string | null;
 }
 
-export function getJapaneseCaption(videoId: string): { text: string; hashtag: string } | null {
-  const row = db().prepare("SELECT text, hashtag FROM video_jp_captions WHERE video_id = ?").get(videoId) as
-    | { text: string; hashtag: string }
+/**
+ * Grava só as legendas informadas: gerar a japonesa não apaga a portuguesa,
+ * nem o contrário — são dois botões separados na tela.
+ */
+export function saveCaptions(videoId: string, patch: { pt?: string; ja?: string; jaHashtag?: string }): void {
+  db()
+    .prepare(
+      `INSERT INTO video_captions (video_id, pt_text, ja_text, ja_hashtag, updated_at)
+       VALUES (@videoId, @pt, @ja, @jaHashtag, @now)
+       ON CONFLICT(video_id) DO UPDATE SET
+         pt_text = COALESCE(@pt, pt_text),
+         ja_text = COALESCE(@ja, ja_text),
+         ja_hashtag = COALESCE(@jaHashtag, ja_hashtag),
+         updated_at = @now`,
+    )
+    .run({
+      videoId,
+      pt: patch.pt ?? null,
+      ja: patch.ja ?? null,
+      jaHashtag: patch.jaHashtag ?? null,
+      now: nowIso(),
+    });
+}
+
+export function getCaptions(videoId: string): VideoCaptions {
+  const row = db().prepare("SELECT pt_text, ja_text, ja_hashtag FROM video_captions WHERE video_id = ?").get(videoId) as
+    | { pt_text: string | null; ja_text: string | null; ja_hashtag: string | null }
     | undefined;
-  return row ?? null;
+  return { pt: row?.pt_text ?? null, ja: row?.ja_text ?? null, jaHashtag: row?.ja_hashtag ?? null };
 }
 
 export function getVideoHashtags(videoId: string): {
@@ -1143,11 +1170,20 @@ export function getVideoHashtags(videoId: string): {
   nosComentarios: Array<{ tag: string; vezes: number }>;
   todas: string[];
   ia: Array<{ tag: string; reason: string | null }>;
+  iaJa: Array<{ tag: string; reason: string | null }>;
 } | null {
   const row = db()
-    .prepare("SELECT do_video_json, nos_comentarios_json, todas_json, ia_json FROM video_hashtags WHERE video_id = ?")
+    .prepare(
+      "SELECT do_video_json, nos_comentarios_json, todas_json, ia_json, ia_ja_json FROM video_hashtags WHERE video_id = ?",
+    )
     .get(videoId) as
-    | { do_video_json: string; nos_comentarios_json: string; todas_json: string; ia_json: string }
+    | {
+        do_video_json: string;
+        nos_comentarios_json: string;
+        todas_json: string;
+        ia_json: string;
+        ia_ja_json: string;
+      }
     | undefined;
 
   if (!row) return null;
@@ -1161,6 +1197,7 @@ export function getVideoHashtags(videoId: string): {
     nosComentarios: parseJson<Array<{ tag: string; vezes: number }>>(row.nos_comentarios_json, []),
     todas: parseJson<string[]>(row.todas_json, []),
     ia: parseJson<Array<{ tag: string; reason: string | null }>>(row.ia_json, []),
+    iaJa: parseJson<Array<{ tag: string; reason: string | null }>>(row.ia_ja_json, []),
   };
 }
 

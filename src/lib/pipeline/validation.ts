@@ -495,6 +495,8 @@ export interface AiHashtag {
 }
 
 const hashtagsSchema = z.object({
+  /** A legenda principal em português; opcional para não quebrar chamadas antigas. */
+  caption: z.string().trim().max(1200).nullish(),
   hashtags: z
     .array(
       z.object({
@@ -505,6 +507,33 @@ const hashtagsSchema = z.object({
     .min(1)
     .max(12),
 });
+
+export interface PublishPack {
+  caption: string | null;
+  hashtags: AiHashtag[];
+}
+
+/** Legenda em português + hashtags, o pacote do botão principal. */
+export function validatePublishPack(raw: unknown, existing: string[], limit: number): PublishPack {
+  const parsed = hashtagsSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new InvalidModelOutput(
+      "O pacote de publicação não seguiu o contrato de saída",
+      parsed.error.issues.map((i) => `${i.path.join(".") || "raiz"}: ${i.message}`),
+    );
+  }
+  const caption = parsed.data.caption?.replace(/\r\n/g, "\n").trim() || null;
+  // Mesma regra do kit de publicação: pedido explícito de engajamento faz o
+  // conteúdo deixar de ser recomendado (ver `publishKitSystemPrompt`).
+  if (caption && ISCA_DE_ENGAJAMENTO.test(caption)) {
+    throw new InvalidModelOutput(
+      "A legenda pede engajamento de forma explícita, o que faz o conteúdo deixar de ser recomendado",
+      [caption.slice(0, 160)],
+    );
+  }
+  return { caption, hashtags: validateHashtags(raw, existing, limit) };
+}
+
 
 /**
  * Valida e limpa as hashtags geradas.
@@ -546,7 +575,35 @@ export function validateHashtags(raw: unknown, existing: string[], limit: number
 
 // ------------------------- Legenda em japonês -------------------------------
 
-const japaneseCaptionSchema = z.object({ caption: z.string().trim().min(5).max(2000) });
+const japaneseCaptionSchema = z.object({
+  caption: z.string().trim().min(5).max(2000),
+  hashtag: z
+    .object({ tag: z.string().trim().min(2).max(60), reason: z.string().trim().max(200).nullish() })
+    .nullish(),
+});
+
+/**
+ * Normalização da hashtag japonesa.
+ *
+ * `normalizeTag` (a de português) reduz a `[a-z0-9_]` e apagaria kana e kanji
+ * inteiros — uma hashtag japonesa sairia vazia. Aqui só caem o `#`, os espaços
+ * e a pontuação; as letras de qualquer alfabeto ficam.
+ */
+export function normalizeJapaneseTag(raw: string): string {
+  return raw
+    .trim()
+    .replace(/^#+/, "")
+    .replace(/[\s　]/g, "")
+    .replace(/[!-/:-@[-`{-~、。！？「」『』（）]/g, "");
+}
+
+/** Hashtags japonesas de volume: não classificam, só misturam o vídeo. */
+const GENERICAS_JA = new Set(["バズれ", "おすすめ", "おすすめにのりたい", "fyp", "foryou", "バズりたい", "拡散希望"]);
+
+export interface JapanesePack {
+  caption: string;
+  hashtag: AiHashtag | null;
+}
 
 /** Hiragana, katakana ou kanji: o que prova que a resposta saiu em japonês. */
 const JAPANESE = /[぀-ゟ゠-ヿ一-龯]/;
@@ -558,6 +615,21 @@ const JAPANESE = /[぀-ゟ゠-ヿ一-龯]/;
  * modelo pode responder em português (e a legenda perderia a razão de ser) ou
  * esquecer a hashtag — que, pelo pedido do usuário, nunca pode faltar.
  */
+export function validateJapanesePack(raw: unknown, hashtag: string): JapanesePack {
+  const caption = validateJapaneseCaption(raw, hashtag);
+  const parsed = japaneseCaptionSchema.safeParse(raw);
+  const bruta = parsed.success ? parsed.data.hashtag : null;
+  if (!bruta) return { caption, hashtag: null };
+
+  const tag = normalizeJapaneseTag(bruta.tag);
+  const fixa = normalizeJapaneseTag(hashtag);
+  // Repetir a hashtag fixa não acrescenta nada — ela já abre a legenda.
+  if (tag.length < 2 || tag === fixa || GENERICAS_JA.has(tag.toLowerCase())) {
+    return { caption, hashtag: null };
+  }
+  return { caption, hashtag: { tag: `#${tag}`, reason: bruta.reason?.trim() || null } };
+}
+
 export function validateJapaneseCaption(raw: unknown, hashtag: string): string {
   const parsed = japaneseCaptionSchema.safeParse(raw);
   if (!parsed.success) {

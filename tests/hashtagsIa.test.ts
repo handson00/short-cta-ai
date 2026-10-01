@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { validateHashtags, validateJapaneseCaption } from "../src/lib/pipeline/validation";
+import { validateHashtags, validateJapaneseCaption, validateJapanesePack, validatePublishPack } from "../src/lib/pipeline/validation";
 import { hashtagsSystemPrompt, japaneseCaptionSystemPrompt } from "../src/lib/prompts";
 
 /**
@@ -65,6 +65,33 @@ describe("validação das hashtags", () => {
   });
 });
 
+describe("pacote em português (legenda + hashtags)", () => {
+  it("traz a legenda e as hashtags juntas", () => {
+    const pack = validatePublishPack(
+      {
+        caption: "Ele atravessou o tempo…\n\nO que achou do outro lado ninguém esperava 👀",
+        hashtags: [{ tag: "#viagemnotempo", reason: "o enredo" }],
+      },
+      [],
+      2,
+    );
+    expect(pack.caption).toContain("atravessou o tempo");
+    expect(pack.hashtags.map((h) => h.tag)).toEqual(["#viagemnotempo"]);
+  });
+
+  it("recusa legenda que pede engajamento: o conteúdo deixa de ser recomendado", () => {
+    expect(() =>
+      validatePublishPack({ caption: "Comenta aqui o que você achou!", hashtags: [{ tag: "#filme" }] }, [], 2),
+    ).toThrow(/pede engajamento/i);
+  });
+
+  it("sem legenda na resposta, as hashtags ainda valem", () => {
+    const pack = validatePublishPack({ hashtags: [{ tag: "#filme" }] }, [], 2);
+    expect(pack.caption).toBeNull();
+    expect(pack.hashtags).toHaveLength(1);
+  });
+});
+
 describe("legenda em japonês", () => {
   const TAG = "#tvアニメ";
 
@@ -95,6 +122,25 @@ describe("legenda em japonês", () => {
     expect(() => validateJapaneseCaption({ texto: "..." }, TAG)).toThrow(/contrato de saída/i);
   });
 
+  it("traz a hashtag japonesa, normalizada sem apagar os caracteres", () => {
+    const pack = validateJapanesePack(
+      { caption: "#tvアニメ 午前2時…", hashtag: { tag: "# 映画 好きな人と繋がりたい ", reason: "o gênero" } },
+      "#tvアニメ",
+    );
+    // A normalização do português reduziria tudo a vazio: kana e kanji ficam.
+    expect(pack.hashtag?.tag).toBe("#映画好きな人と繋がりたい");
+    expect(pack.caption.startsWith("#tvアニメ")).toBe(true);
+  });
+
+  it("não repete a hashtag fixa nem aceita as de volume", () => {
+    expect(validateJapanesePack({ caption: "#tvアニメ 午前2時…", hashtag: { tag: "#tvアニメ" } }, "#tvアニメ").hashtag).toBeNull();
+    expect(validateJapanesePack({ caption: "#tvアニメ 午前2時…", hashtag: { tag: "#バズれ" } }, "#tvアニメ").hashtag).toBeNull();
+  });
+
+  it("sem hashtag na resposta, a legenda ainda vale", () => {
+    expect(validateJapanesePack({ caption: "#tvアニメ 午前2時…" }, "#tvアニメ").hashtag).toBeNull();
+  });
+
   it("o prompt leva a hashtag configurada e os dois formatos", () => {
     const p = japaneseCaptionSystemPrompt("#TVアニメ");
     expect(p).toContain("#TVアニメ");
@@ -111,7 +157,7 @@ const gerar = vi.fn();
 const gerarJp = vi.fn();
 
 vi.mock("../src/lib/providers/ai", async () => ({
-  aiProvider: () => ({ generateHashtags: gerar, generateJapaneseCaption: gerarJp }),
+  aiProvider: () => ({ generatePublishPack: gerar, generateJapanesePack: gerarJp }),
   AiError: (await vi.importActual<typeof import("../src/lib/providers/ai/errors")>("../src/lib/providers/ai/errors"))
     .AiError,
 }));
@@ -141,7 +187,7 @@ afterAll(() => {
 afterEach(() => {
   gerar.mockReset();
   gerarJp.mockReset();
-  gerarJp.mockResolvedValue("#tvアニメ 午前2時、奇妙なことが起きた…。");
+  gerarJp.mockResolvedValue({ caption: "#tvアニメ 午前2時、奇妙なことが起きた…。", hashtag: null });
 });
 
 /** Liga ou desliga a legenda japonesa para isolar o que o teste mede. */
@@ -169,94 +215,63 @@ function post(body: unknown) {
   return route.POST(new Request("http://x", { method: "POST", body: JSON.stringify(body) }));
 }
 
-describe("rota que gera as hashtags", () => {
-  it("gera, salva e devolve o que foi gerado", async () => {
-    await legendaJp(false);
+const PACK_PT = {
+  caption: "Ele atravessou o tempo para salvar quem amava.\n\nMas o que encontrou do outro lado ninguém esperava 👀",
+  hashtags: [
+    { tag: "#viagemnotempo", reason: "o enredo" },
+    { tag: "#suspense", reason: "o clima" },
+  ],
+};
+
+describe("rota: pacote em português", () => {
+  it("salva a legenda principal e as hashtags", async () => {
     const id = video();
-    gerar.mockResolvedValue([
-      { tag: "#viagemnotempo", reason: "o enredo" },
-      { tag: "#suspense", reason: "o clima" },
-    ]);
+    gerar.mockResolvedValue(PACK_PT);
 
     const data = (await (await post({ videoIds: [id] })).json()) as { gerados: unknown[]; porVideo: number };
     expect(data.gerados).toHaveLength(1);
     expect(data.porVideo).toBe(2);
+    expect(repo.getCaptions(id).pt).toContain("atravessou o tempo");
     expect(repo.getVideoHashtags(id)?.ia.map((h) => h.tag)).toEqual(["#viagemnotempo", "#suspense"]);
+    // O japonês é outro pedido: não sai junto.
+    expect(gerarJp).not.toHaveBeenCalled();
+    expect(repo.getCaptions(id).ja).toBeNull();
   });
 
-  it("vídeo que já tem sugestão é pulado: não gasta chamada à toa", async () => {
-    await legendaJp(false);
+  it("vídeo que já tem a legenda é pulado: não gasta chamada à toa", async () => {
     const id = video();
-    repo.saveAiHashtags(id, [{ tag: "#ja", reason: null }]);
+    repo.saveCaptions(id, { pt: "já tenho" });
 
     const data = (await (await post({ videoIds: [id] })).json()) as { pulados: unknown[] };
     expect(data.pulados).toHaveLength(1);
     expect(gerar).not.toHaveBeenCalled();
   });
 
-  it("com a legenda japonesa ligada, gera e salva com a hashtag configurada", async () => {
-    await legendaJp(true);
-    const id = video();
-    gerar.mockResolvedValue([{ tag: "#nova", reason: null }]);
-
-    await post({ videoIds: [id] });
-    expect(gerarJp).toHaveBeenCalledTimes(1);
-    expect(gerarJp.mock.calls[0][1]).toBe("#tvアニメ");
-    expect(repo.getJapaneseCaption(id)?.text).toContain("午前2時");
-  });
-
-  it("ligar a legenda depois não deixa de fora quem já tinha as hashtags", async () => {
-    await legendaJp(false);
-    const id = video();
-    gerar.mockResolvedValue([{ tag: "#primeira", reason: null }]);
-    await post({ videoIds: [id] });
-    expect(repo.getJapaneseCaption(id)).toBeNull();
-
-    // Agora o usuário liga a opção: o vídeo não pode ser "pulado por já ter
-    // hashtags" — faltaria justamente a legenda. E as hashtags não são refeitas.
-    await legendaJp(true);
-    gerar.mockClear();
-    await post({ videoIds: [id] });
-    expect(gerar).not.toHaveBeenCalled();
-    expect(gerarJp).toHaveBeenCalledTimes(1);
-    expect(repo.getJapaneseCaption(id)?.text).toContain("午前2時");
-  });
-
-  it("desligada, não gera legenda nenhuma", async () => {
-    await legendaJp(false);
-    const id = video();
-    gerar.mockResolvedValue([{ tag: "#x", reason: null }]);
-
-    await post({ videoIds: [id] });
-    expect(gerarJp).not.toHaveBeenCalled();
-    expect(repo.getJapaneseCaption(id)).toBeNull();
-  });
-
   it("com `force`, refaz — e as antigas entram na lista de não repetir", async () => {
     const id = video();
+    repo.saveCaptions(id, { pt: "antiga" });
     repo.saveAiHashtags(id, [{ tag: "#antiga", reason: null }]);
-    gerar.mockResolvedValue([{ tag: "#nova", reason: null }]);
+    gerar.mockResolvedValue({ caption: "nova legenda", hashtags: [{ tag: "#nova", reason: null }] });
 
     await post({ videoIds: [id], force: true });
     expect(gerar).toHaveBeenCalledTimes(1);
     expect(gerar.mock.calls[0][1]).toContain("#antiga");
-    expect(repo.getVideoHashtags(id)?.ia.map((h) => h.tag)).toEqual(["#nova"]);
+    expect(repo.getCaptions(id).pt).toBe("nova legenda");
   });
 
   it("as capturadas pela extensão entram no 'não repita'", async () => {
     const id = video();
     repo.saveVideoHashtags(id, { doVideo: ["#filme", "#cenasdefilme"], nosComentarios: [], todas: [] });
-    gerar.mockResolvedValue([{ tag: "#nova", reason: null }]);
+    gerar.mockResolvedValue(PACK_PT);
 
     await post({ videoIds: [id] });
     expect(gerar.mock.calls[0][1]).toEqual(expect.arrayContaining(["#filme", "#cenasdefilme"]));
   });
 
   it("falha num vídeo não derruba o lote, e é relatada", async () => {
-    await legendaJp(false);
     const a = video();
     const b = video();
-    gerar.mockRejectedValueOnce(new Error("modelo fora do ar")).mockResolvedValueOnce([{ tag: "#ok", reason: null }]);
+    gerar.mockRejectedValueOnce(new Error("modelo fora do ar")).mockResolvedValueOnce(PACK_PT);
 
     const data = (await (await post({ videoIds: [a, b] })).json()) as {
       gerados: unknown[];
@@ -276,5 +291,50 @@ describe("rota que gera as hashtags", () => {
     const data = (await (await post({ videoIds: [a, b, c] })).json()) as { falhas: unknown[] };
     expect(gerar).toHaveBeenCalledTimes(1);
     expect(data.falhas).toHaveLength(1);
+  });
+});
+
+describe("rota: pacote em japonês", () => {
+  it("salva a legenda e a hashtag japonesa, sem tocar na portuguesa", async () => {
+    await legendaJp(true);
+    const id = video();
+    repo.saveCaptions(id, { pt: "a portuguesa" });
+    repo.saveAiHashtags(id, [{ tag: "#emportugues", reason: null }]);
+    gerarJp.mockResolvedValue({
+      caption: "#tvアニメ 午前2時、奇妙なことが起きた…。",
+      hashtag: { tag: "#映画", reason: "o gênero" },
+    });
+
+    await post({ videoIds: [id], idioma: "ja" });
+    expect(gerarJp.mock.calls[0][1]).toBe("#tvアニメ");
+
+    const c = repo.getCaptions(id);
+    expect(c.ja).toContain("午前2時");
+    expect(c.jaHashtag).toBe("#tvアニメ");
+    // A portuguesa continua lá: são dois botões independentes.
+    expect(c.pt).toBe("a portuguesa");
+
+    const h = repo.getVideoHashtags(id)!;
+    expect(h.iaJa.map((x) => x.tag)).toEqual(["#映画"]);
+    expect(h.ia.map((x) => x.tag)).toEqual(["#emportugues"]);
+  });
+
+  it("desligada em Configurações, a rota recusa em vez de gerar", async () => {
+    await legendaJp(false);
+    const id = video();
+    const res = await post({ videoIds: [id], idioma: "ja" });
+    expect(res.status).toBe(409);
+    expect(gerarJp).not.toHaveBeenCalled();
+    await legendaJp(true);
+  });
+
+  it("o pedido em japonês não gera o pacote em português", async () => {
+    await legendaJp(true);
+    const id = video();
+    gerarJp.mockResolvedValue({ caption: "#tvアニメ テスト", hashtag: null });
+
+    await post({ videoIds: [id], idioma: "ja" });
+    expect(gerar).not.toHaveBeenCalled();
+    expect(repo.getCaptions(id).pt).toBeNull();
   });
 });

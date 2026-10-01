@@ -26,6 +26,7 @@ export function db(): Database.Database {
   migrateSourceProfileColumns(handle);
   migrateAiOnDemandColumns(handle);
   migrateAiProviderColumn(handle);
+  migrateCaptionsTable(handle);
   migrateCaptureQueueUnique(handle);
 
   instance = handle;
@@ -115,6 +116,33 @@ function migrateAiProviderColumn(handle: Database.Database): void {
   if (tags.size > 0 && !tags.has("ia_json")) {
     handle.exec("ALTER TABLE video_hashtags ADD COLUMN ia_json TEXT NOT NULL DEFAULT '[]'");
   }
+  if (tags.size > 0 && !tags.has("ia_ja_json")) {
+    handle.exec("ALTER TABLE video_hashtags ADD COLUMN ia_ja_json TEXT NOT NULL DEFAULT '[]'");
+  }
+}
+
+/**
+ * `video_jp_captions` (só japonês) virou `video_captions` (português e
+ * japonês), quando a legenda principal passou a ser a em português.
+ *
+ * Copia e só então remove a antiga, numa transação: ou as legendas já geradas
+ * sobrevivem inteiras, ou nada acontece. Perder uma legenda gerada custaria
+ * uma chamada paga para refazer.
+ */
+function migrateCaptionsTable(handle: Database.Database): void {
+  const antiga = handle
+    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'video_jp_captions'")
+    .get();
+  if (!antiga) return;
+
+  handle.transaction(() => {
+    handle.exec(`
+      INSERT INTO video_captions (video_id, pt_text, ja_text, ja_hashtag, updated_at)
+      SELECT video_id, NULL, text, hashtag, updated_at FROM video_jp_captions
+      WHERE video_id NOT IN (SELECT video_id FROM video_captions)
+    `);
+    handle.exec("DROP TABLE video_jp_captions");
+  })();
 }
 
 /** Bancos criados antes da funcionalidade TikTok ganham as colunas novas aqui. */

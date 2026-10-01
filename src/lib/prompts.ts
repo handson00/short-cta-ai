@@ -563,12 +563,22 @@ export function hashtagsSystemPrompt(count: number, existing: string[]): string 
     ? `O vídeo JÁ USA estas: ${existing.join(" ")}. Não repita nenhuma delas nem variações óbvias (singular/plural).`
     : "O vídeo ainda não tem hashtag nenhuma.";
 
-  return `Você escolhe hashtags para um corte de filme ou série publicado como
-Reels ou TikTok.
+  return `Você escreve a LEGENDA e escolhe as HASHTAGS de um corte de filme ou
+série publicado como Reels ou TikTok. Tudo em português do Brasil.
+
+A LEGENDA é a principal: é o texto que vai na publicação.
+- Até 4 linhas. Comece pelo que prende: a situação estranha, a ameaça, a
+  pergunta que a cena deixa.
+- Não entregue o desfecho.
+- Termine com um convite genuíno a assistir até o fim, ou com uma pergunta
+  aberta. NUNCA peça curtida, comentário, compartilhamento ou seguir.
+- De 1 a 3 emojis, no máximo.
+- Use só o que as evidências mostram. Se a obra não foi identificada com
+  segurança, não cite título nenhum.
 
 ${jaTem}
 
-Gere exatamente ${count} hashtags NOVAS, em português do Brasil.
+Gere também exatamente ${count} hashtags NOVAS, em português do Brasil.
 
 COMO ESCOLHER:
 - A hashtag classifica o conteúdo. Ela faz o vídeo chegar a quem procura
@@ -588,6 +598,7 @@ CONTRATO DE SAÍDA — responda com um único objeto JSON, sem texto ao redor,
 sem blocos de código:
 
 {
+  "caption": "a legenda em português, com quebras de linha reais (\\n)",
   "hashtags": [
     { "tag": "#exemplo", "reason": "o que do vídeo esta hashtag classifica" }
   ]
@@ -676,11 +687,17 @@ REGRAS:
 - Entre 3 e 8 linhas no total. De 1 a 3 emojis, no máximo.
 - Não peça curtida, comentário nem compartilhamento.
 
+Gere também UMA hashtag em japonês, diferente de ${hashtag}, que classifique
+este vídeo para o público japonês — o gênero, o tipo de cena, o tema. Em
+japonês (kana ou kanji), sem espaço. Não use hashtag de volume (#バズれ,
+#おすすめ, #фyp e parecidas): elas misturam o vídeo com qualquer assunto.
+
 CONTRATO DE SAÍDA — responda com um único objeto JSON, sem texto ao redor,
 sem blocos de código:
 
 {
-  "caption": "a legenda completa em japonês, com quebras de linha reais (\\n)"
+  "caption": "a legenda completa em japonês, com quebras de linha reais (\\n)",
+  "hashtag": { "tag": "#例", "reason": "o que do vídeo esta hashtag classifica" }
 }`;
 }
 

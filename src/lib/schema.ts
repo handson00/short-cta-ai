@@ -228,8 +228,9 @@ CREATE TABLE IF NOT EXISTS video_hashtags (
   todas_json TEXT NOT NULL DEFAULT '[]',
   -- Hashtags geradas pela IA na pagina de Exportacoes, com o motivo de cada
   -- uma. Ficam separadas das capturadas: uma e sugestao, a outra e o que o
-  -- post de origem de fato usou.
+  -- post de origem de fato usou. ia_ja_json sao as em japones.
   ia_json TEXT NOT NULL DEFAULT '[]',
+  ia_ja_json TEXT NOT NULL DEFAULT '[]',
   captured_at TEXT NOT NULL
 );
 
@@ -248,12 +249,15 @@ CREATE TABLE IF NOT EXISTS capture_queue (
 );
 CREATE INDEX IF NOT EXISTS idx_capture_queue_status ON capture_queue(status);
 
--- Legenda em japones gerada na pagina de Exportacoes. Separada do
--- publish_kits: aquele e o kit completo em portugues, com outro prompt.
-CREATE TABLE IF NOT EXISTS video_jp_captions (
+-- Legendas geradas na pagina de Exportacoes: a principal em portugues e, se
+-- pedida, a em japones. Separada do publish_kits, que e o kit completo com
+-- outro prompt e outras regras. Substituiu video_jp_captions (migracao em db.ts).
+CREATE TABLE IF NOT EXISTS video_captions (
   video_id TEXT PRIMARY KEY REFERENCES videos(id) ON DELETE CASCADE,
-  text TEXT NOT NULL,
-  hashtag TEXT NOT NULL,
+  pt_text TEXT,
+  ja_text TEXT,
+  -- A hashtag fixa que abriu a legenda japonesa, como estava na configuracao.
+  ja_hashtag TEXT,
   updated_at TEXT NOT NULL
 );
 

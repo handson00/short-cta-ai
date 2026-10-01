@@ -2482,3 +2482,53 @@ Decisões:
 Verificado: typecheck, 466/466 (5 novos em `tests/retomarFalhados.test.ts`,
 incluindo o modo preservado e o duplo clique). **Não verificado:** o botão
 clicado na tela — depende do build e de a cota do usuário renovar.
+
+## 40. Legenda em português como principal, e o japonês num botão à parte (2026-10-01)
+
+Pedido do usuário: a legenda principal é a **em português**, gerada para o
+vídeo; o japonês vira um **botão separado**, para ter as duas e escolher em
+qual idioma publicar. E, junto com as 2 hashtags em português, **mais uma em
+japonês**, como a que abre a legenda japonesa.
+
+### Como ficou
+
+Dois pacotes, dois botões, **uma chamada cada**:
+
+| Botão | Gera | Guarda |
+| --- | --- | --- |
+| **Legenda (português)** | legenda + 2 hashtags | `video_captions.pt_text`, `video_hashtags.ia_json` |
+| **Legenda (japonês)** | legenda + 1 hashtag japonesa | `video_captions.ja_text`, `video_hashtags.ia_ja_json` |
+
+Cada um tem "para este vídeo" e "em todos (N)". Quem quer só o português não
+paga pelo japonês — antes o japonês saía junto, obrigatoriamente.
+
+Hashtags do vídeo: **2 capturadas + 2 em português + 1 em japonês = 5**, que é
+exatamente o limite da plataforma (documentado em `publishKitSystemPrompt`).
+Na tela elas vêm em cinza (capturadas), verde (IA) e azul (IA em japonês).
+
+### Decisões que não são óbvias
+
+- **A hashtag japonesa tem normalização própria** (`normalizeJapaneseTag`). A
+  de português reduz a `[a-z0-9_]` e apagaria kana e kanji inteiros — a
+  hashtag sairia vazia. Teste: `# 映画 好きな人と繋がりたい` → `#映画好きな人と繋がりたい`.
+- **A legenda em português passa pela mesma regra do kit**: pedido explícito de
+  engajamento ("comenta aqui") é recusado, porque faz o conteúdo deixar de ser
+  recomendado.
+- **A hashtag japonesa repetida da fixa é descartada**: ela já abre a legenda.
+- **Gerar um idioma não apaga o outro** (`saveCaptions` grava só o que recebe).
+
+### A migração
+
+`video_jp_captions` virou `video_captions` (as duas línguas). A migração copia
+e só então remove a antiga, **numa transação**: ou as legendas sobrevivem
+inteiras, ou nada acontece. Cada uma custou uma chamada paga.
+
+Conferida numa **cópia do banco real** (API de backup do SQLite, com o original
+aberto só para leitura): as 2 legendas do usuário chegaram inteiras com a
+hashtag de cada uma, a tabela antiga saiu, a coluna `ia_ja_json` foi criada, as
+2 hashtags em português foram preservadas e o `foreign_key_check` ficou limpo.
+
+Verificado: typecheck, 477/477 (28 em `hashtagsIa.test.ts`, 5 novos em
+`migracaoLegendas.test.ts`, que monta um banco no formato antigo e abre pelo
+caminho de produção). **Não verificado:** uma chamada real com o prompt novo da
+legenda em português, e as telas.

@@ -111,7 +111,7 @@ sem vídeo.
 | `/api/editor/export` | GET · POST · DELETE | Estado da fila, enfileirar, cancelar/limpar |
 | `/api/exports` | GET | Os vídeos prontos, com tudo para publicar (página `/exports`) |
 | `/api/exports/[jobId]/media` | GET | Serve o MP4 exportado; o caminho vem do job, nunca do cliente |
-| `/api/exports/hashtags` | POST | Gera 2 hashtags por vídeo e, se ligada, a legenda em japonês |
+| `/api/exports/hashtags` | POST | Gera o pacote de publicação: `idioma: "pt"` (legenda + 2 hashtags) ou `"ja"` (legenda + 1 hashtag japonesa) |
 | `/api/editor/import` | POST | Upload manual — **sem interface desde a Fase 5.1**, mantido de propósito |
 | `/api/editor/thumbnail` | GET | Miniatura do upload manual |
 
@@ -140,7 +140,7 @@ adicionadas depois migram em `src/lib/db.ts`.
 | `editor_jobs` | Fila de exportação: status, progresso, arquivo de saída, erro; a camada de texto fica em `export_json.textLayer` |
 | `editor_video_texts` | Texto próprio do vídeo no editor; sem linha, vale o CTA da análise |
 | `editor_video_effects` | Efeitos por vídeo (espelho, corte, cor, velocidade, zoom, áudio); sem linha = sem efeito |
-| `video_jp_captions` | Legenda em japonês gerada na página de Exportações |
+| `video_captions` | Legendas da página de Exportações: a principal em português e a em japonês (substituiu `video_jp_captions`) |
 | `source_profiles` | Perfil de origem (Fase 9): recorte, página (`origin_key`) e proporção (`aspect`) do vídeo em que foi desenhado |
 
 `editor_video_crops.profile_id` diz de qual perfil o recorte foi copiado. É

@@ -75,6 +75,7 @@ export async function GET() {
     const transcript = repo.getTranscript(r.video_id);
     const captured = repo.getVideoHashtags(r.video_id);
     const kit = repo.getPublishKit(r.video_id);
+    const captions = repo.getCaptions(r.video_id);
     const work = repo.getWork(r.video_id);
 
     const recommended = rankHashtags(captured, {
@@ -106,8 +107,12 @@ export async function GET() {
       kitHashtags: kit?.hashtags ?? [],
       /** Sugeridas pela IA na própria página, com o motivo de cada uma. */
       aiHashtags: captured?.ia ?? [],
+      /** Hashtags em japonês sugeridas pela IA. */
+      aiHashtagsJa: captured?.iaJa ?? [],
+      /** Legenda principal, em português, gerada nesta página. */
+      ptCaption: captions.pt,
       /** Legenda em japonês, quando gerada. */
-      jpCaption: repo.getJapaneseCaption(r.video_id)?.text ?? null,
+      jpCaption: captions.ja,
       transcript: transcript?.hasSpeech ? transcript.text : null,
       sceneSummary: analysis?.sceneSummary ?? null,
       plot: analysis?.plot ?? null,

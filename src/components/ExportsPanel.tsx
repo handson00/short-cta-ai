@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
 /** Tipos declarados aqui: componente cliente nunca importa de arquivo que toca o banco. */
 interface ExportItem {
@@ -19,6 +19,9 @@ interface ExportItem {
   hashtags: string[];
   kitHashtags: string[];
   aiHashtags: Array<{ tag: string; reason: string | null }>;
+  aiHashtagsJa: Array<{ tag: string; reason: string | null }>;
+  /** Legenda principal, em português. */
+  ptCaption: string | null;
   jpCaption: string | null;
   transcript: string | null;
   sceneSummary: string | null;
@@ -375,32 +378,38 @@ function DadosDoVideo({
   lista: ExportItem[];
   onGerado: () => Promise<void>;
 }) {
-  const [gerando, setGerando] = useState<"este" | "todos" | null>(null);
+  const [gerando, setGerando] = useState<string | null>(null);
   const [aviso, setAviso] = useState<{ kind: "ok" | "erro"; text: string } | null>(null);
 
   const base = item.hashtags.length > 0 ? item.hashtags : item.kitHashtags;
   const daIa = item.aiHashtags.map((h) => h.tag);
+  const daIaJa = item.aiHashtagsJa.map((h) => h.tag);
   const hashtags = [...base, ...daIa].join(" ");
-  // O que se cola numa publicação: legenda (quando houver), o gancho e as hashtags.
-  const pacote = [item.description ?? item.cta ?? "", hashtags].filter(Boolean).join("\n\n");
+  // Para colar numa publicação em português: a legenda gerada aqui (a
+  // principal), senão a do kit, senão o próprio gancho — mais as hashtags.
+  const pacote = [item.ptCaption ?? item.description ?? item.cta ?? "", hashtags].filter(Boolean).join("\n\n");
+  // A versão japonesa leva a legenda e as hashtags japonesas.
+  const pacoteJa = [item.jpCaption ?? "", daIaJa.join(" ")].filter(Boolean).join("\n\n");
 
-  async function gerarHashtags(escopo: "este" | "todos") {
+  /** O que cada idioma gera, para a confirmação dizer o custo sem rodeio. */
+  const temPacote = (v: ExportItem, idioma: "pt" | "ja") => (idioma === "pt" ? v.ptCaption : v.jpCaption) !== null;
+
+  async function gerar(idioma: "pt" | "ja", escopo: "este" | "todos") {
     const alvos = escopo === "este" ? [item] : lista;
-    const pendentes = escopo === "todos" ? alvos.filter((v) => v.aiHashtags.length === 0) : alvos;
-    const refazer = escopo === "este" && item.aiHashtags.length > 0;
-
+    const pendentes = escopo === "todos" ? alvos.filter((v) => !temPacote(v, idioma)) : alvos;
+    const refazer = escopo === "este" && temPacote(item, idioma);
     const quantos = refazer ? 1 : pendentes.length;
+
+    const oQue = idioma === "pt" ? "a legenda em português e 2 hashtags" : "a legenda em japonês e 1 hashtag japonesa";
     if (quantos === 0) {
-      setAviso({ kind: "ok", text: "Todos os vídeos da lista já têm hashtags da IA." });
+      setAviso({ kind: "ok", text: `Todos os vídeos da lista já têm ${oQue}.` });
       return;
     }
     const confirmado = window.confirm(
       [
         escopo === "este"
-          ? refazer
-            ? "Gerar outras 2 hashtags para este vídeo?"
-            : "Gerar 2 hashtags para este vídeo?"
-          : `Gerar 2 hashtags para ${quantos} vídeo(s) desta lista?`,
+          ? `Gerar ${refazer ? "de novo " : ""}${oQue} para este vídeo?`
+          : `Gerar ${oQue} para ${quantos} vídeo(s) desta lista?`,
         `Custo: ${quantos} chamada(s) à IA (pagas no GhostCLI; no Gemini gratuito, contam na cota).`,
         escopo === "todos" && alvos.length > pendentes.length
           ? `${alvos.length - pendentes.length} já têm e serão pulados.`
@@ -411,13 +420,17 @@ function DadosDoVideo({
     );
     if (!confirmado) return;
 
-    setGerando(escopo);
+    setGerando(`${idioma}-${escopo}`);
     setAviso(null);
     try {
       const res = await fetch("/api/exports/hashtags", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ videoIds: (refazer ? alvos : pendentes).map((v) => v.videoId), force: refazer }),
+        body: JSON.stringify({
+          videoIds: (refazer ? alvos : pendentes).map((v) => v.videoId),
+          idioma,
+          force: refazer,
+        }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
@@ -425,7 +438,7 @@ function DadosDoVideo({
       setAviso({
         kind: falhas.length > 0 ? "erro" : "ok",
         text:
-          `${(data.gerados ?? []).length} vídeo(s) receberam hashtags novas.` +
+          `${(data.gerados ?? []).length} vídeo(s) receberam ${oQue}.` +
           (falhas.length > 0 ? ` ${falhas.length} falharam: ${falhas[0].reason}` : ""),
       });
       await onGerado();
@@ -468,27 +481,9 @@ function DadosDoVideo({
       <div className="rounded-lg border border-ink-800 bg-ink-950/40 p-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <span className="text-[10px] uppercase tracking-wider text-ink-500">
-            Hashtags ({base.length + daIa.length})
+            Hashtags ({base.length + daIa.length + daIaJa.length})
           </span>
-          <div className="flex flex-wrap gap-1">
-            <button
-              onClick={() => void gerarHashtags("este")}
-              disabled={gerando !== null}
-              title="Gera 2 hashtags novas para este vídeo, com IA, sem repetir as que ele já tem"
-              className="rounded-md border border-accent/50 px-2 py-0.5 text-[10px] text-accent transition hover:bg-accent/10 disabled:opacity-50"
-            >
-              {gerando === "este" ? "Gerando…" : item.aiHashtags.length > 0 ? "↻ Outras 2 com IA" : "✨ +2 com IA"}
-            </button>
-            <button
-              onClick={() => void gerarHashtags("todos")}
-              disabled={gerando !== null || lista.length === 0}
-              title="Gera 2 hashtags para todos os vídeos desta lista que ainda não têm"
-              className="rounded-md border border-ink-700 px-2 py-0.5 text-[10px] text-ink-400 transition hover:border-accent/50 hover:text-accent disabled:opacity-50"
-            >
-              {gerando === "todos" ? "Gerando…" : `✨ +2 em todos (${lista.length})`}
-            </button>
-            {hashtags && <CopyButton label="Copiar" value={hashtags} />}
-          </div>
+          {hashtags && <CopyButton label="Copiar" value={hashtags} />}
         </div>
 
         {hashtags ? (
@@ -508,16 +503,26 @@ function DadosDoVideo({
                 {h.tag}
               </span>
             ))}
+            {item.aiHashtagsJa.map((h) => (
+              // Azul = sugerida pela IA em japonês, para separar dos dois outros grupos.
+              <span
+                key={h.tag}
+                title={h.reason ?? "Sugerida pela IA, em japonês"}
+                className="rounded bg-sky-500/15 px-1.5 py-0.5 text-[11px] text-sky-300"
+              >
+                {h.tag}
+              </span>
+            ))}
           </div>
         ) : (
           <p className="mt-1 text-[11px] text-ink-500">Nenhuma hashtag ainda.</p>
         )}
 
-        {daIa.length > 0 && (
+        {(daIa.length > 0 || daIaJa.length > 0) && (
           <p className="mt-1.5 text-[10px] text-ink-500">
-            Em verde, as sugeridas pela IA (passe o mouse para ver o motivo). Elas classificam o conteúdo — ninguém
-            consegue saber de antemão quais dão visualização, e hashtag genérica (#viral, #fyp) não é usada porque
-            mistura o vídeo com qualquer assunto.
+            Cinza: capturadas do post. Verde: sugeridas pela IA. Azul: em japonês. (Passe o mouse para ver o motivo.)
+            Elas classificam o conteúdo — ninguém consegue saber de antemão quais dão visualização, e hashtag genérica
+            (#viral, #fyp) não é usada porque mistura o vídeo com qualquer assunto.
           </p>
         )}
 
@@ -528,12 +533,137 @@ function DadosDoVideo({
         )}
       </div>
 
-      <Field label="Legenda do kit de publicação (português)" value={item.description} />
-      <Field label="Legenda em japonês" value={item.jpCaption} />
+      <Legenda
+        titulo="Legenda (português)"
+        principal
+        texto={item.ptCaption}
+        vazio="Ainda não gerada. É a legenda principal do post."
+        botoes={
+          <>
+            <BotaoGerar
+              rotulo={item.ptCaption ? "↻ Gerar outra" : "✨ Gerar"}
+              ocupado={gerando === "pt-este"}
+              desabilitado={gerando !== null}
+              titulo="Gera a legenda em português e 2 hashtags para este vídeo"
+              onClick={() => void gerar("pt", "este")}
+            />
+            <BotaoGerar
+              rotulo={`em todos (${lista.length})`}
+              ocupado={gerando === "pt-todos"}
+              desabilitado={gerando !== null || lista.length === 0}
+              titulo="Gera a legenda em português e 2 hashtags para todos os vídeos da lista que ainda não têm"
+              onClick={() => void gerar("pt", "todos")}
+              secundario
+            />
+          </>
+        }
+      />
+
+      <Legenda
+        titulo="Legenda (japonês)"
+        texto={item.jpCaption}
+        vazio="Ainda não gerada. Opcional, para publicar também em japonês."
+        copiarTudo={pacoteJa || undefined}
+        botoes={
+          <>
+            <BotaoGerar
+              rotulo={item.jpCaption ? "↻ Gerar outra" : "✨ Gerar em japonês"}
+              ocupado={gerando === "ja-este"}
+              desabilitado={gerando !== null}
+              titulo="Gera a legenda em japonês e 1 hashtag japonesa para este vídeo"
+              onClick={() => void gerar("ja", "este")}
+            />
+            <BotaoGerar
+              rotulo={`em todos (${lista.length})`}
+              ocupado={gerando === "ja-todos"}
+              desabilitado={gerando !== null || lista.length === 0}
+              titulo="Gera a legenda em japonês para todos os vídeos da lista que ainda não têm"
+              onClick={() => void gerar("ja", "todos")}
+              secundario
+            />
+          </>
+        }
+      />
+
+      <Field label="Legenda do kit de publicação" value={item.description} collapsed />
       <Field label="Resumo da cena" value={item.sceneSummary} collapsed />
       <Field label="Enredo (pela fala)" value={item.plot} collapsed />
       <Field label="Transcrição" value={item.transcript} collapsed />
     </section>
+  );
+}
+
+/**
+ * Uma legenda com os botões de gerar.
+ *
+ * Diferente de `Field`: aparece mesmo vazia, porque é aqui que se pede a
+ * geração — um campo escondido não teria onde clicar.
+ */
+function Legenda({
+  titulo,
+  texto,
+  vazio,
+  botoes,
+  principal,
+  copiarTudo,
+}: {
+  titulo: string;
+  texto: string | null;
+  vazio: string;
+  botoes: ReactNode;
+  principal?: boolean;
+  /** Valor do "Copiar com hashtags", quando faz sentido para este idioma. */
+  copiarTudo?: string;
+}) {
+  return (
+    <div
+      className={`rounded-lg border p-2 ${principal ? "border-accent/30 bg-accent/5" : "border-ink-800 bg-ink-950/40"}`}
+    >
+      <div className="flex flex-wrap items-center justify-between gap-1.5">
+        <span className="text-[10px] uppercase tracking-wider text-ink-500">{titulo}</span>
+        <div className="flex flex-wrap gap-1">
+          {botoes}
+          {texto && <CopyButton label="Copiar" value={texto} />}
+          {texto && copiarTudo && <CopyButton label="Com hashtags" value={copiarTudo} />}
+        </div>
+      </div>
+      {texto ? (
+        <p className="mt-1 whitespace-pre-wrap text-xs text-ink-300">{texto}</p>
+      ) : (
+        <p className="mt-1 text-[11px] text-ink-500">{vazio}</p>
+      )}
+    </div>
+  );
+}
+
+function BotaoGerar({
+  rotulo,
+  ocupado,
+  desabilitado,
+  titulo,
+  onClick,
+  secundario,
+}: {
+  rotulo: string;
+  ocupado: boolean;
+  desabilitado: boolean;
+  titulo: string;
+  onClick: () => void;
+  secundario?: boolean;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={desabilitado}
+      title={titulo}
+      className={`rounded-md border px-2 py-0.5 text-[10px] transition disabled:opacity-50 ${
+        secundario
+          ? "border-ink-700 text-ink-400 hover:border-accent/50 hover:text-accent"
+          : "border-accent/50 text-accent hover:bg-accent/10"
+      }`}
+    >
+      {ocupado ? "Gerando…" : rotulo}
+    </button>
   );
 }
 

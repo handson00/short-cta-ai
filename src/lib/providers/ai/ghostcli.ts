@@ -1,7 +1,7 @@
-import type { AIProvider, CtaOptions, CtaResult, SceneAnalysis, SceneContext, Transcript } from "../../types";
+import type { AIProvider, CtaOptions, CtaResult, PublishContext, SceneAnalysis, SceneContext, Transcript } from "../../types";
 import type { AiProfile, AppSettings } from "../../settings";
 import { analysisSystemPrompt, buildAnalysisUserMessage, buildCommentCtaUserMessage, buildGenerationUserMessage, buildPublishKitUserMessage, commentCtaSystemPrompt, publishKitSystemPrompt, generationSystemPrompt, hashtagsSystemPrompt, buildHashtagsUserMessage, japaneseCaptionSystemPrompt, optimizedCommentCtaSystemPrompt, buildOptimizedCommentCtaUserMessage, PROMPT_VERSION } from "../../prompts";
-import { extractJson, InvalidModelOutput, parseSceneAnalysis, validateCommentCtaResult, validateCtaResult, validatePublishKit, validateOptimizedCommentCtaResult, validateHashtags, validateJapaneseCaption, type AiHashtag, type CommentCtaResult, type PublishKitResult, type ValidatedCtaResult, type OptimizedCommentCtaResult } from "../../pipeline/validation";
+import { extractJson, InvalidModelOutput, parseSceneAnalysis, validateCommentCtaResult, validateCtaResult, validatePublishKit, validateOptimizedCommentCtaResult, validatePublishPack, validateJapanesePack, type PublishPack, type JapanesePack, type CommentCtaResult, type PublishKitResult, type ValidatedCtaResult, type OptimizedCommentCtaResult } from "../../pipeline/validation";
 import type { CommentInsights } from "../../pipeline/commentInsights";
 import { chatCompletion, type ChatMessage, type ChatRequest, type ClientConfig, type ToolDefinition } from "./client";
 import { AiError, detailedMessage, type AiErrorCode } from "./errors";
@@ -132,26 +132,19 @@ export class ChatCompletionsProvider implements AIProvider {
     );
   }
 
-  async generateHashtags(
-    context: Parameters<AIProvider["generateHashtags"]>[0],
-    existing: string[],
-    count: number,
-  ): Promise<AiHashtag[]> {
+  async generatePublishPack(context: PublishContext, existing: string[], count: number): Promise<PublishPack> {
     const model = this.ctx.profile.generationModel;
     const messages: ChatMessage[] = [
       { role: "system", content: hashtagsSystemPrompt(count, existing) },
       { role: "user", content: buildHashtagsUserMessage(context) },
     ];
-    const content = await this.converse("hashtags", model, messages, false);
-    return this.parseOrRepair<AiHashtag[]>("hashtags", model, messages, content, (raw) =>
-      validateHashtags(extractJson(raw), existing, count),
+    const content = await this.converse("legenda_hashtags", model, messages, false);
+    return this.parseOrRepair<PublishPack>("legenda_hashtags", model, messages, content, (raw) =>
+      validatePublishPack(extractJson(raw), existing, count),
     );
   }
 
-  async generateJapaneseCaption(
-    context: Parameters<AIProvider["generateHashtags"]>[0],
-    hashtag: string,
-  ): Promise<string> {
+  async generateJapanesePack(context: PublishContext, hashtag: string): Promise<JapanesePack> {
     const model = this.ctx.profile.generationModel;
     const messages: ChatMessage[] = [
       { role: "system", content: japaneseCaptionSystemPrompt(hashtag) },
@@ -159,8 +152,8 @@ export class ChatCompletionsProvider implements AIProvider {
       { role: "user", content: buildHashtagsUserMessage(context) },
     ];
     const content = await this.converse("legenda_japones", model, messages, false);
-    return this.parseOrRepair<string>("legenda_japones", model, messages, content, (raw) =>
-      validateJapaneseCaption(extractJson(raw), hashtag),
+    return this.parseOrRepair<JapanesePack>("legenda_japones", model, messages, content, (raw) =>
+      validateJapanesePack(extractJson(raw), hashtag),
     );
   }
 

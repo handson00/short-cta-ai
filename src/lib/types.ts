@@ -239,6 +239,15 @@ export interface ExistingCtaDetection {
 
 // ======================== TIPOS DE PROVEDOR ========================
 
+/** O que a legenda e as hashtags da página de Exportações precisam saber do vídeo. */
+export interface PublishContext {
+  cta: string | null;
+  plot: string | null;
+  sceneSummary: string | null;
+  transcript: string | null;
+  workTitle: string | null;
+}
+
 export interface AIProvider {
   analyzeScene(input: SceneContext): Promise<SceneAnalysis>;
   /**
@@ -257,29 +266,17 @@ export interface AIProvider {
     analysis: SceneAnalysis | null,
     count: number,
   ): Promise<import("./pipeline/validation").OptimizedCommentCtaResult>;
-  /** Hashtags novas para o vídeo, sem repetir as que ele já tem. */
-  generateHashtags(
-    context: {
-      cta: string | null;
-      plot: string | null;
-      sceneSummary: string | null;
-      transcript: string | null;
-      workTitle: string | null;
-    },
+  /** Legenda em português + hashtags novas, sem repetir as que o vídeo já tem. */
+  generatePublishPack(
+    context: PublishContext,
     existing: string[],
     count: number,
-  ): Promise<import("./pipeline/validation").AiHashtag[]>;
-  /** Legenda em japonês aberta pela hashtag fixa (página de Exportações). */
-  generateJapaneseCaption(
-    context: {
-      cta: string | null;
-      plot: string | null;
-      sceneSummary: string | null;
-      transcript: string | null;
-      workTitle: string | null;
-    },
+  ): Promise<import("./pipeline/validation").PublishPack>;
+  /** Legenda em japonês aberta pela hashtag fixa, mais uma hashtag japonesa. */
+  generateJapanesePack(
+    context: PublishContext,
     hashtag: string,
-  ): Promise<string>;
+  ): Promise<import("./pipeline/validation").JapanesePack>;
   /** Legenda e hashtags, segundo o que hoje distribui um Reels. */
   generatePublishKit(
     insights: import("./pipeline/commentInsights").CommentInsights | null,

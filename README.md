@@ -78,10 +78,12 @@ para clicar em um botão.
   celular — arrastar, rolar ou setas para trocar de vídeo, com som.
 - Ao lado, tudo para publicar, cada campo com botão de copiar: CTA, hashtags,
   legenda em português, legenda em japonês, resumo, enredo e transcrição.
-- **Hashtags por IA**: 2 por vídeo, no vídeo aberto ou em todos de uma vez.
-  Hashtag de volume (#viral, #fyp) é recusada pelo validador — ela mistura o
-  vídeo com qualquer assunto e não traz alcance.
-- **Legenda em japonês** aberta por uma hashtag fixa, ligável em Configurações.
+- **Legenda em português + 2 hashtags** num botão, e **legenda em japonês + 1
+  hashtag japonesa** em outro — uma chamada de IA cada, no vídeo aberto ou em
+  todos de uma vez. Dá 5 hashtags por vídeo (2 capturadas + 2 PT + 1 JP), que
+  é o limite da plataforma.
+  Hashtag de volume (#viral, #fyp, #バズれ) é recusada pelo validador — ela
+  mistura o vídeo com qualquer assunto e não traz alcance.
 - Arquivo que saiu da pasta aparece **marcado**, não escondido: sumir da lista
   faria parecer que a exportação nunca aconteceu.
 
@@ -337,7 +339,7 @@ src/
     editorRepo.ts      acesso ao banco (edição)
     settings.ts        preferências e credencial
 scripts/               worker separado, fixtures, mock do GhostCLI
-tests/                 461 testes (unitários e de integração)
+tests/                 477 testes (unitários e de integração)
 docs/                  handoff, histórico, roadmap, editor e arquivo de sessões antigas
 ```
 
@@ -346,7 +348,7 @@ docs/                  handoff, histórico, roadmap, editor e arquivo de sessõe
 `videos`, `analysis_jobs`, `frames`, `transcripts`, `visual_analyses`,
 `work_identifications`, `scene_analyses`, `cta_suggestions`, `user_selections`,
 `ai_request_logs`, `style_examples`, `app_settings`, `post_comments`,
-`video_hashtags`, `video_jp_captions`, `publish_kits`, `capture_queue`
+`video_hashtags`, `video_captions`, `publish_kits`, `capture_queue`
 — mais as do editor (`editor_*`, `source_profiles`), descritas em
 [`docs/video-editor/ARCHITECTURE.md`](docs/video-editor/ARCHITECTURE.md).
 
