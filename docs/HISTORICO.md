@@ -2532,3 +2532,47 @@ Verificado: typecheck, 477/477 (28 em `hashtagsIa.test.ts`, 5 novos em
 `migracaoLegendas.test.ts`, que monta um banco no formato antigo e abre pelo
 caminho de produção). **Não verificado:** uma chamada real com o prompt novo da
 legenda em português, e as telas.
+
+## 41. Documentação revisada de novo, com o Gemini já rodado em escala (2026-10-01)
+
+Segunda revisão a partir do banco, agora com o provedor novo exercitado num
+lote de 98 vídeos.
+
+### O que os números mostram
+
+| Medido | Valor |
+| --- | --- |
+| Chamadas ao Gemini bem-sucedidas | **188** (eram 38 na revisão anterior) |
+| Reaproveitadas, sem chamada | 11 |
+| Erros | 41: 17 limite por minuto, 16 cota diária, 6 sobrecarga, 1 timeout, 1 rede |
+| Modelo que atendeu | **186 das 188 no `gemini-3.5-flash-lite`** |
+| Análise / geração | ~3,9 s cada |
+| Correção automática do contrato (`_repair`) | 4 vezes |
+
+Três leituras:
+
+- **A recomendação do Básico se confirmou.** Quase tudo saiu nele, com a
+  velocidade medida em §32 — e o lote de 98 só parou na cota, não por lentidão.
+- **Os erros de limite por minuto (17) não viraram falha de job**: o cliente
+  espera o `retryDelay` e repete, e por isso há 88 análises e 88 gerações
+  concluídas. Só a cota diária (16) interrompe de verdade.
+- **O `_repair` ganhou o seu valor**: 4 respostas fora do contrato foram
+  corrigidas numa segunda chamada, em vez de virarem job com erro.
+
+### Estado do acervo
+
+98 vídeos, 97 com fala · 26.704 comentários em 98 vídeos · 98 promovidos à
+edição, 97 com recorte, 98 com efeitos · 4 exportações concluídas · **87 CTAs
+gerados, 11 parados na cota**.
+
+### O que foi reescrito
+
+`HANDOFF.md` (§4 com os números reais e os dois pacotes de publicação; §9 com
+as entregas §39 e §40 e o estado do lote), `ROADMAP.md` (itens 4.3, 4.4 e o
+novo 4.6) e `README.md` na entrega anterior.
+
+### A pendência que bloqueia o resto
+
+**O servidor roda o build de 16:50 de 2026-09-30.** Nada do §39 em diante está
+no ar, e a migração `video_jp_captions` → `video_captions` só acontece na
+subida. Buildar e reiniciar é o primeiro passo da próxima sessão.

@@ -44,7 +44,7 @@ Era o escopo contratado. Está essencialmente completo.
 | CTA a partir do enredo pela fala | ⚠️ | 2026-09-29: a geração lê a transcrição; sem chamada real conferida ainda (HISTORICO §24) |
 | OCR e classificação do texto | ✅ | Detecta o CTA fixo do vídeo; verificado em vídeo real |
 | Integração GhostCLI | ✅ | Em uso contra a API real (item 0.4) |
-| Integração Google Gemini | ✅ | 2026-09-30: 38 chamadas ok, 9 reaproveitadas; análise e geração em ~3,5 s |
+| Integração Google Gemini | ✅ | 188 chamadas ok, 11 reaproveitadas; análise e geração em ~3,9 s. 186 no `gemini-3.5-flash-lite` |
 | Validação da saída do modelo | ✅ | zod + regras editoriais + uma correção |
 | Geração de CTAs com distribuição por estilo | ✅ | A soma bate com a quantidade pedida |
 | Identificação de obra | ✅ | Só afirma com evidência; correção manual |
@@ -129,8 +129,9 @@ Nasceu dos pedidos do usuário durante o uso, não do escopo original.
 | --- | --- | --- |
 | 4.1 | Página de Exportações com os vídeos prontos | ✅ feed vertical 9:16, dados com botão de copiar |
 | 4.2 | Pasta de saída configurável | ✅ validada com escrita real ao salvar |
-| 4.3 | Hashtags por IA (2 por vídeo, em lote) | ✅ conferido em 2 vídeos reais |
-| 4.4 | Legenda em japonês com hashtag fixa | ✅ conferido em 2 vídeos reais; ligável em Configurações |
+| 4.3 | Legenda em português + 2 hashtags, por vídeo ou em lote | ✅ a principal; hashtags conferidas em 2 vídeos reais |
+| 4.4 | Legenda em japonês + 1 hashtag japonesa, num botão à parte | ✅ conferida em 2 vídeos reais; ligável em Configurações |
+| 4.6 | Retomar os vídeos que pararam por cota | ✅ 2026-10-01 — botão no bloco Progresso (HISTORICO §39) |
 | 4.5 | Publicar direto na plataforma | ❌ não feito e não pedido. Exigiria API oficial e conta de negócios |
 
 ---

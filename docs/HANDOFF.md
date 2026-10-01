@@ -140,10 +140,13 @@ Verificado de ponta a ponta, com vídeos reais:
   rodando junto. Ver §5.2.
 - **Dois provedores de IA, à escolha em Configurações** (HISTORICO §28, §32):
   - **GhostCLI** (pago): ~950 chamadas registradas em `ai_request_logs`.
-  - **Google Gemini** (plano gratuito): em uso desde 2026-09-30 — 38 chamadas
-    bem-sucedidas, 9 reaproveitadas, 7 erros (5 de sobrecarga 503). Análise e
-    geração em ~3,5 s cada. O **modelo reserva** entra quando o escolhido está
+  - **Google Gemini** (plano gratuito): em uso desde 2026-09-30 — **188
+    chamadas bem-sucedidas**, 11 reaproveitadas, 41 erros (17 de limite por
+    minuto, 16 de cota diária, 6 de sobrecarga). Análise ~3,9 s e geração
+    ~3,9 s. **186 das 188 saíram no `gemini-3.5-flash-lite`**, o recomendado —
+    confirma a escolha. O **modelo reserva** entra quando o escolhido está
     sobrecarregado; o raciocínio vai em nível baixo, que é o que deixa rápido.
+    A correção automática do contrato (`_repair`) foi usada 4 vezes.
   - O sistema **nunca troca de provedor sozinho**: falhou, mostra o erro.
 - Detecção de origem pelo nome do arquivo (§6).
 - **Comentários do post recebidos pela extensão do Chrome**: 98 vídeos,
@@ -178,13 +181,19 @@ Verificado de ponta a ponta, com vídeos reais:
   suporte a `Range`.
 - Por vídeo, com botão de copiar: CTA, hashtags, legenda em português (kit),
   legenda em japonês, resumo, enredo e transcrição.
-- **Hashtags por IA** (2 por vídeo, no vídeo aberto ou em todos): conferido em
-  2026-09-30 — num corte de viagem no tempo saíram `#maquinadotempo` e
-  `#ficcaocientifica`; num de atirador, `#atiradordeelite` e `#suspense`.
-  ~1,3 s por vídeo. Hashtag de volume é recusada pelo validador.
-- **Legenda em japonês** aberta pela hashtag fixa, ligável em Configurações.
-  Conferida em 2026-09-30: saiu no formato pedido (gancho + emoji, corpo,
-  convite a ver até o fim), ~1,2 s por vídeo.
+- **Dois pacotes de publicação, um botão cada, uma chamada de IA cada:**
+  - **Legenda em português + 2 hashtags** — é a principal.
+  - **Legenda em japonês + 1 hashtag japonesa** — opcional, ligável em
+    Configurações, para publicar também em japonês.
+  - Cada um roda no vídeo aberto ou em todos da lista. Vídeo que já tem é
+    pulado, para não gastar chamada à toa.
+- **5 hashtags por vídeo** (2 capturadas + 2 em português + 1 em japonês), que
+  é o limite da plataforma. Na tela: cinza, verde e azul.
+- Conferido em 2026-09-30, com chamadas reais: num corte de viagem no tempo
+  saíram `#maquinadotempo` e `#ficcaocientifica`; num de atirador,
+  `#atiradordeelite` e `#suspense` (~1,3 s). As legendas japonesas saíram no
+  formato pedido (~1,2 s). Hashtag de volume é recusada pelo validador, em
+  português e em japonês.
 
 ---
 
@@ -359,10 +368,13 @@ src/
    - **Commitar.** Nada desde `c59d36a` (2026-09-29 11:36) foi para o git:
      são as entregas dos §23 a §37, mais de 70 arquivos. É a pendência mais
      cara — todo o trabalho de dois dias está só no disco.
-   - **Conferir na tela** o que foi entregue em 2026-09-30 e não teve
-     conferência visual: a aba Efeitos, o feed de Exportações (o gesto de
-     arrastar), o botão "Outro CTA", os perfis de origem (Fase 9) e o som no
-     preview do Editor.
+   - **Buildar e reiniciar.** O servidor ainda roda o build de 16:50 de
+     2026-09-30: nada do §39 em diante está no ar, e a migração das legendas
+     só roda na subida.
+   - **Conferir na tela** o que não teve conferência visual: a aba Efeitos, o
+     feed de Exportações (o gesto de arrastar), o botão "Outro CTA", os perfis
+     de origem (Fase 9), o som no preview do Editor, o botão "Terminar os N
+     com erro" e os dois botões de legenda.
    - **Dois defeitos conhecidos da extensão** (§10): o `content.js` captura
      sozinho em toda página de vídeo, inclusive nas abas que a fila abre
      (captura em dobro), e nada na tela mostra que a extensão parou de
@@ -373,14 +385,14 @@ src/
      usuário** em 2026-09-29 — ver
      [`video-editor/IMPLEMENTATION_PLAN.md`](./video-editor/IMPLEMENTATION_PLAN.md).
 
-### Onde a última sessão parou (2026-09-30, fim do dia)
+### Onde a última sessão parou (2026-10-01, madrugada)
 
 Um dia inteiro de entregas, **todas sem commit**. Em ordem, com o que o banco
 prova de cada uma (HISTORICO §28 a §37):
 
 | Entrega | Estado |
 | --- | --- |
-| **Gemini como 2º provedor** (§28, §32) | ✅ em uso: 38 chamadas ok, 9 reaproveitadas, 7 erros |
+| **Gemini como 2º provedor** (§28, §32) | ✅ em uso: 188 chamadas ok, 11 reaproveitadas, 41 erros |
 | **Modelo reserva + raciocínio baixo** (§32) | ✅ análise e geração em ~3,5 s |
 | **Modelo recomendado por etapa** (§32) | ✅ o Básico é o sugerido nas duas |
 | **"Outro CTA" no editor** (§29) | ⚠️ tela não conferida |
@@ -392,10 +404,17 @@ prova de cada uma (HISTORICO §28 a §37):
 | **Página `/exports` em feed** (§35) | ⚠️ gesto no navegador não conferido |
 | **Hashtags por IA** (§36) | ✅ geradas em 2 vídeos, com boa pontaria |
 | **Legenda em japonês** (§37) | ✅ gerada em 2 vídeos, no formato pedido |
+| **Revisão da documentação** (§38) | ✅ feita a partir do banco |
+| **"Terminar os N com erro"** (§39) | ⚠️ tela não conferida; **11 vídeos esperando** |
+| **Legenda PT principal + JP à parte** (§40) | ⚠️ tela não conferida; migração testada em cópia do banco real |
 
-**Em andamento quando a sessão terminou:** um "Gerar CTAs" em lote com o
-Gemini — 13 concluídos, 1 gerando, **84 ainda na fila**. Se o servidor for
-reiniciado, eles voltam para a fila sozinhos (lease), mas vale conferir.
+**O lote de "Gerar CTAs" terminou:** 87 dos 98 concluíram; **11 pararam com a
+cota diária do Gemini esgotada**. É o caso que o §39 resolve — o botão
+"↻ Terminar os 11 com erro" no bloco Progresso, depois que a cota renovar.
+
+**A migração das legendas ainda não rodou** no banco do usuário: ela acontece
+no próximo `npm start`. Foi testada numa cópia do banco real, e as 2 legendas
+japonesas chegaram inteiras.
 
 **Resolvido:** a captura de comentários em massa. Era a extensão antiga no
 Chrome; o usuário recarregou e os **98 pedidos foram atendidos — 26.704
