@@ -81,7 +81,7 @@ export async function GET() {
          ev.template_id
        FROM videos v
        JOIN editor_videos ev ON ev.video_id = v.id
-       WHERE v.purged_at IS NULL
+       WHERE v.purged_at IS NULL AND v.archived_at IS NULL
        ORDER BY ev.added_at DESC`,
     )
     .all() as Array<{

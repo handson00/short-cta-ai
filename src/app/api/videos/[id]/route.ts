@@ -1,6 +1,6 @@
 import { fail, handleError, json, requireAuth } from "@/lib/api";
-import * as repo from "@/lib/repo";
 import { videoDetail } from "@/lib/view";
+import { tirarDaFila } from "@/lib/videoRemoval";
 
 export const dynamic = "force-dynamic";
 
@@ -20,12 +20,11 @@ export async function DELETE(_request: Request, { params }: { params: Promise<{ 
 
   try {
     const { id } = await params;
-    // Pede o cancelamento antes de apagar: se o worker estiver no meio do
-    // processamento, ele para em vez de continuar trabalhando em arquivos
-    // que não existem mais.
-    repo.requestCancel(id);
-    repo.deleteVideo(id);
-    return json({ deleted: id });
+    // Cancela análise e exportação em andamento antes de os arquivos sumirem.
+    // Com exportação no histórico, o vídeo é arquivado, não apagado (§47).
+    const resultado = tirarDaFila(id);
+    if (!resultado) return fail("Vídeo não encontrado.", 404);
+    return json({ deleted: id, resultado });
   } catch (err) {
     return handleError(err);
   }

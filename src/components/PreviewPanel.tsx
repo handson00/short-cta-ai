@@ -99,7 +99,10 @@ export default function PreviewPanel({ videoSummary, onChanged, onClose }: Props
   const active = ACTIVE_STATUSES.includes(video.status ?? "queued");
 
   async function handleDelete() {
-    const confirmed = window.confirm("Tem certeza que deseja excluir este vídeo? Esta ação não pode ser desfeita.");
+    const confirmed = window.confirm(
+      "Excluir este vídeo da Fila? Esta ação não pode ser desfeita.\n\n" +
+        "Se ele já foi exportado, continua no histórico de Exportações, com legendas e hashtags — só sai de lá se você apagar lá.",
+    );
     if (!confirmed) return;
     setDeleting(true);
     try {

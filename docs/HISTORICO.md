@@ -2576,3 +2576,310 @@ novo 4.6) e `README.md` na entrega anterior.
 **O servidor roda o build de 16:50 de 2026-09-30.** Nada do §39 em diante está
 no ar, e a migração `video_jp_captions` → `video_captions` só acontece na
 subida. Buildar e reiniciar é o primeiro passo da próxima sessão.
+
+---
+
+## 42. Build, subida e a migração das legendas no banco real (2026-10-02)
+
+A pendência que o §41 apontou como bloqueadora do resto: o servidor rodava um
+build antigo e, desde 2026-09-30, **nem isso** — o `npm start` do usuário
+respondeu `Could not find a production build in the '.next' directory`. O
+`.next` tinha `cache/`, `server/` e `types/`, mas nenhum `BUILD_ID`: restos de
+um build interrompido, não um build.
+
+`npm run build` passou limpo. **Antes de subir**, uma cópia do banco foi
+guardada fora do projeto: a migração `video_jp_captions` → `video_captions`
+roda na inicialização e mexe em legendas que custaram chamada paga. Ela foi
+testada em cópia (§40), mas teste em cópia não é a mesma coisa que o banco de
+verdade.
+
+Conferido no banco **depois** da subida:
+
+| Conferido | Resultado |
+| --- | --- |
+| `video_captions` criada, `video_jp_captions` removida | ✅ |
+| As 2 legendas japonesas | ✅ inteiras (128 e 112 caracteres) |
+| Coluna `ia_ja_json` em `video_hashtags` | ✅ criada, `[]` nas 65 linhas |
+| As 2 hashtags em português geradas por IA | ✅ preservadas |
+| `pragma foreign_key_check` | ✅ vazio |
+
+Na subida: `[fila] worker ativo`, `[editor] fila de exportação ativa (h264_qsv,
+2 em paralelo)`, `/` redireciona para `/login` (307) e `/api/status` responde
+401 sem sessão — a autenticação está de pé.
+
+### Os dois MP4 que "sumiram" — respondido, e não era a aplicação
+
+O §9 do HANDOFF deixou em aberto por que os MP4 exportados às 19:03 de
+2026-09-30 não estavam em `data/output`. O banco e o código fecham o caso:
+
+1. Um job só fica `completed` depois do `renameSync` do `.processing` para o
+   nome final (`export.ts`). Às 19:03:51 os dois arquivos existiam.
+2. O segundo lote, às 19:29:44, gravou **nos mesmos nomes**. A
+   `uniqueOutputPath` desvia para `_editado_2.mp4` quando o nome está ocupado —
+   e não desviou. Logo, naquele instante a pasta já estava sem os arquivos.
+3. O único `unlink` que toca essa pasta remove apenas `.processing`
+   (`exportQueue.ts`). Nada no código apaga um MP4 pronto.
+
+Os arquivos saíram da pasta entre 19:03:51 e 19:29:44 UTC (16:03–16:29 local)
+por algo de fora da aplicação. Os 2 que estão lá hoje são os renders de 19:30
+UTC. **Não há defeito a corrigir** — mas fica registrado que o nome de saída
+não carrega data nem id do job, então um arquivo removido na mão e um
+re-export passam a ocupar o mesmo nome.
+
+### O que isto destrava
+
+O botão "↻ Terminar os 11 com erro" (§39), os dois botões de legenda (§40) e
+tudo do §39 em diante passaram a existir no ar pela primeira vez. A cota diária
+do Gemini que parou os 11 vídeos em 2026-09-30 já renovou.
+
+## 43. Editor — Template e Efeitos fixos na rolagem (2026-10-02)
+
+Pedido do usuário: ao descer pela lista "Na edição", a coluna de Template e
+Efeitos subia junto e saía da tela — só o painel de Recorte/Preview ficava
+fixo (§31). Agora as duas laterais ficam paradas e **só a lista rola**.
+
+A coluna da esquerda recebeu a mesma regra do `<aside>` da direita: `sticky
+top-[72px]`, altura máxima da tela menos o cabeçalho e rolagem interna quando o
+painel é mais alto que a janela (o Template, com a prévia e os campos de texto,
+costuma ser).
+
+Conferido antes: nada no TemplatePanel, EffectsPanel ou CtaPicker é menu
+flutuante que a rolagem interna cortaria — o único `absolute` é a bolinha do
+interruptor, dentro do próprio botão.
+
+É só CSS: nenhum componente é desmontado, então o salvamento automático do
+template pendente não se perde. Verificado: typecheck. **Não verificado:** a
+tela — depende do build.
+
+## 44. Exportações — o botão de som não ligava o som (2026-10-02)
+
+Relato do usuário: "em Exportações está faltando o áudio dos vídeos".
+
+**Os arquivos têm som.** Medido nos 2 MP4 de `data/output`: faixa AAC estéreo
+48 kHz, volume médio −17,5 e −18 dB, pico −1,3 dB — fala em nível normal.
+
+**O defeito era o gesto de arrastar.** O feed começa mudo, de propósito, para o
+autoplay funcionar, e o botão 🔇 fica *dentro* da área de arrastar. O
+`pointerdown` subia até ela, que chamava `setPointerCapture` na hora — e, com o
+ponteiro capturado, o navegador entrega o `click` à área capturada, não ao
+botão. O `onClick` do som nunca disparava. O mesmo bloqueava o toque no vídeo
+para pausar e as setas ▲▼. O comentário da função dizia "nunca a partir dos
+controles do vídeo", mas o código não conferia.
+
+O §36 corrigiu o `muted` como atributo no React, mas a tela não foi conferida
+— e era a tela que tinha o segundo defeito.
+
+Correção em `ExportsPanel.tsx`:
+
+- gesto que começa num `<button>` é ignorado pelo arrasto;
+- a captura do ponteiro só entra depois de 6 px de movimento
+  (`DRAG_START_PX`): abaixo disso é um clique, e o clique chega ao alvo.
+
+Verificado: typecheck, 13/13 em `exportsPage.test.ts`. **Não verificado:** o
+clique na tela — depende do build. Há 2 erros não tratados nesse arquivo de
+teste (`ENOENT` no stream da rota de mídia depois de a pasta temporária ser
+apagada); **já existiam antes desta mudança** e não fazem nenhum teste falhar.
+
+## 45. Intel integrada × RTX 4050: banco de testes de exportação (2026-10-02)
+
+Pergunta do usuário: a exportação ocupa 100% da GPU integrada; não seria
+melhor na RTX 4050? **Nada foi alterado no app** — só medido.
+
+### Por que o app usa a Intel
+
+`resolveEncoder` tenta NVENC primeiro, e o NVENC **falha ao abrir**: o FFmpeg
+9.0.1 exige a API NVENC 13.1, que pede **driver NVIDIA ≥ 610**; o instalado é o
+572.40 (API 13.0). Falha em qualquer resolução — não é o tamanho de 64×64 do
+teste de `encoderWorks`, hipótese descartada na medição. A placa está boa: o
+FFmpeg 8.0.1 da máquina (`Editor Automa Dark`) abre NVENC, QSV e AV1 com o mesmo
+driver. **Atualizar o driver NVIDIA destrava a 4050 sem mudar código.**
+
+### Método
+
+FFmpeg 8.0.1 para os dois lados (comparação justa). 3 vídeos reais do acervo
+(menor, mediano e maior bitrate), 30 s cada, com o filtro da produção (30 fps,
+BT.709) e um CTA desenhado por cima. Qualidade por **VMAF/PSNR/SSIM** contra uma
+referência sem perdas. Notebook na tomada, plano de energia **"Silent"** —
+números com o plano de desempenho devem ser maiores para os dois lados.
+
+Dois erros de medição corrigidos no caminho, registrados porque enganam:
+o `TaskStop` não mata o laço do script no Windows (5 cópias rodaram juntas — o
+script ganhou trava por diretório); e o VMAF pareava quadros por timestamp, que
+o `.mkv` arredonda a ms — escorregava 1 quadro nos cortes de cena (VMAF 43
+falso). Pareado por índice (`setpts=N/(30*TB)`), o mínimo foi a 97.
+
+### Resultados (média dos 3 vídeos)
+
+| Config | Quadros/s | Núcleos de CPU | VMAF a 10 Mbps | Pior quadro (complexo) |
+| --- | --- | --- | --- | --- |
+| Intel, preset do app | 209 | 2,5 | 98,7 | 93,9 |
+| Intel, `veryslow` | 131 | 1,8 | 98,8 | 95,6 |
+| **NVIDIA, preset do app (`p5`)** | **288** | 2,0 | 98,7 | **96,7** |
+| NVIDIA `p7` + AQ | 207 | 1,6 | 98,7 | 96,4 |
+| CPU libx264 `medium` | 114 | 12,4 | 98,4 | 95,7 |
+
+A 10 Mbps (o que o app exporta) **as duas são praticamente transparentes**; a
+diferença está na velocidade e nos piores momentos. A 3 Mbps, no vídeo
+complexo, quadros com VMAF < 90: NVIDIA `p5` **0**, Intel 18, Intel `veryslow`
+11, CPU 22, NVIDIA `p7`+AQ **63** — o AQ derruba a métrica; a olho, ampliado,
+não se distingue. Conclusão: `p7`+AQ é mais lento e não melhor.
+
+Exportação real (60 s com áudio): Intel 8,3 s · NVIDIA 6,2 s · CPU 20,4 s (CPU
+a 90%). **Paralelizar não ajuda em nenhuma das duas** (Intel +12%, NVIDIA
++2%: a 4050 de notebook tem um único NVENC). **As duas juntas** — um vídeo em
+cada — somaram **410 quadros/s**, +38% sobre só a NVIDIA.
+
+AV1 na NVIDIA: a melhor qualidade a 3 Mbps (VMAF 98,9, pior quadro 94,4) e o
+mais rápido de ponta a ponta (406 quadros/s). A Intel UHD não codifica AV1.
+
+Resultados brutos, scripts e as imagens de comparação ficaram na pasta
+temporária da sessão, não no projeto.
+
+**Decisão do usuário:** vira a **Fase 13** do editor (`video-editor/IMPLEMENTATION_PLAN.md`), como próxima fase — mas não agora. Nada foi implementado.
+
+## 46. Exportações → extensão "Agendador IG": o aviãozinho (2026-10-02)
+
+Pedido do usuário: ele criou uma extensão do Chrome que agenda reels pela
+página do Instagram (`agendador-ig-extensao-v0.4.0/`, agora no projeto) e quer,
+em cada vídeo pronto da página de Exportações, um botão que mande para ela o
+vídeo e **o que ele marcar** — legenda, hashtags — já pronto para agendar.
+
+### O que a extensão é por dentro
+
+Não há código-fonte: só a versão compilada (0.3.0 e 0.4.0 em `Downloads`,
+procurado no disco). O painel é React minificado. Lido o que importa:
+
+- os posts ficam em `chrome.storage.local["agendador-ig/state"]`
+  (`{version: 1, posts, settings: {startDate, times, fixedHashtags}}`);
+- cada vídeo fica no IndexedDB `agendador-ig`, store `videos`, chave = id do post;
+- o painel lê o estado **uma vez** ao abrir e depois só grava — não percebe
+  quem grava por fora;
+- o `content.js` (o que opera o Instagram) recebe um job pronto e pede o vídeo
+  ao painel em pedaços de 4 MB.
+
+### A decisão: gravar onde o painel lê, sem tocar no painel
+
+Mexer no JS minificado seria frágil. A integração entra por **`background.js`**
+(legível, 34 linhas) e dois arquivos novos; o painel fica intacto. O post do
+sistema entra **como rascunho, no próximo horário livre da grade** — igual a
+importar o arquivo à mão. **Nada é programado no Instagram sem o usuário**:
+quem programa continua sendo o painel.
+
+O vídeo não atravessa a página: o servidor emite um **ingresso** (link
+assinado com HMAC, de um vídeo só, válido por 15 min) e a extensão baixa direto.
+A página não sabe o id da extensão (muda com a pasta), então uma **ponte**
+(`ponte-short-cta.js`, content script só em `localhost:3000`) repassa as
+mensagens. Detalhes e diagrama em `agendador-ig-extensao-v0.4.0/LEIA-ME.md`.
+
+### No sistema
+
+- **`lib/agendadorPost.ts`** (puro): monta o post do jeito que a extensão
+  monta — legenda + linha em branco + hashtags que ainda não estão na legenda
+  (a japonesa abre com uma), validação de hashtag (sem hífen) e os limites de
+  2200 caracteres (por grafema: emoji conta 1) e 30 hashtags. A prévia da tela
+  e o servidor usam a mesma função.
+- **`lib/exportsData.ts`**: a montagem de cada exportação saiu de
+  `/api/exports` para ser fonte única — o CTA tem regra de prioridade, e o post
+  não pode sair com outro texto que o da tela.
+- **Rotas**: `POST /api/agendador/[jobId]` (prepara: post + miniatura 180×320
+  como a do painel + ingresso; só aceita hashtags que a tela ofereceu; recusa
+  se o sistema não estiver aberto em `localhost`), `GET /api/agendador/video`
+  (sem sessão, só com ingresso; o caminho vem do job no banco) e
+  `POST /api/agendador/[jobId]/confirmar` (recibo).
+- **Recibo** em `agendador_envios`, gravado **só depois** que a extensão diz
+  "recebi": um envio que falhou não aparece como enviado.
+- **Tela**: cartão "✈ Enviar para o Agendador IG" com caixas para os textos
+  (legenda PT, JP, CTA, kit), hashtags clicáveis, prévia fiel com contadores,
+  estado da extensão (conectada / não encontrada / endereço errado) e o motivo
+  de cada recusa.
+
+### Na extensão (0.5.0)
+
+`manifest.json` (permissão para `localhost:3000`, ponte), `background.js`
+(bloco novo; o original intacto), `ponte-short-cta.js` e `ponte-horarios.js`
+(réplica das regras de horário do painel). Recusa com motivo: painel no meio de
+um envio ao Instagram, vídeo já presente (campo `origem.exportJobId`), link
+fora do sistema, download incompleto, página que não é do sistema.
+
+### Verificado
+
+Typecheck; **504/504** (27 novos em `tests/agendador.test.ts`: montagem igual à
+da extensão, ingresso adulterado/vencido, regras de horário carregadas do
+próprio arquivo da extensão, as três rotas com um MP4 real, download com
+tamanho conferido e recibo só após confirmação). Os 2 erros soltos do
+`exportsPage.test.ts` são os de antes (§44). `next build` limpo, feito numa
+cópia isolada para não reescrever o `.next` do servidor em uso.
+
+**Não verificado:** a extensão rodando no Chrome — a ponte, o download pelo
+service worker, a gravação no IndexedDB e a recarga do painel. Depende de
+carregar a 0.5.0 da pasta do projeto (o Chrome carrega hoje a de `Downloads`;
+trocar a pasta troca o armazenamento — a antiga tinha 1 rascunho de teste).
+
+## 47. Excluir da Fila não apaga mais o histórico de Exportações (2026-10-03)
+
+Pedido do usuário: ao excluir vídeos da Fila (onde se trabalha), os que já
+foram exportados devem **continuar no histórico de Exportações**, com as
+informações — ele volta lá depois para pegar dados do vídeo. Só saem de lá se
+ele apagar lá.
+
+### O que acontecia
+
+`repo.deleteVideo` apagava o arquivo enviado, os artefatos e a linha do vídeo.
+Pela cascata (`ON DELETE CASCADE` em todas as tabelas), sumiam junto legendas,
+hashtags, transcrição, CTA, comentários — e os `editor_jobs`, que **são** o
+histórico. O MP4 ficava na pasta, órfão, fora da tela.
+
+### Como ficou: arquivar em vez de apagar
+
+Coluna nova `videos.archived_at` (migração em `db.ts`). "Excluir" na Fila
+(`videoRemoval.tirarDaFila`, usado pelas duas rotas de exclusão):
+
+- **sem exportação concluída** → apaga de vez, como sempre;
+- **com exportação** → **arquiva**: sai da Fila e do Editor (`editor_videos`)
+  e da coleta de comentários; os dados ficam. Do disco sai o que pesa (vídeo
+  enviado, áudio, frames); a **miniatura fica**, é a capa no histórico.
+
+Antes de arquivar, cancela análise e exportação em andamento — o estado da fila
+de exportação está no `globalThis`, então o cancelamento funciona a partir da
+rota da Fila (armadilha 6 do HANDOFF).
+
+Os arquivados ficam fora de tudo o que é "trabalho": `listVideos` (Fila,
+extensões, exportação CSV), busca de duplicado por hash (reimportar o mesmo
+arquivo cria um vídeo novo, em vez de ser "ignorado" sem nada aparecer),
+casamento de comentários pelo código do post, "Terminar os N com erro",
+contagem da fila, claim de job de análise e a biblioteca do Editor.
+
+Decisões que não são óbvias:
+
+- **Os jobs de análise não são apagados, são filtrados.** Apagar a linha de um
+  job em andamento faria o worker perder o sinal de cancelamento.
+- **O texto próprio do editor fica.** `editor_video_texts` aponta para o vídeo,
+  não para `editor_videos` — e é dele que sai o CTA do histórico.
+- **Arquivo preso por outro programa não impede o arquivamento** (EBUSY no
+  Windows): o vídeo já saiu da Fila; o resto sai quando for apagado de vez.
+
+### Remover do histórico
+
+Botão "🗑 Remover do histórico" em cada exportação (`DELETE /api/exports/[jobId]`),
+com a confirmação no próprio cartão:
+
+- **o MP4 da pasta fica, por padrão** — há uma caixa "apagar também o arquivo";
+  é o vídeo pronto para publicar, numa pasta que é do usuário;
+- se o vídeo já tinha saído da Fila e esta é a **última** exportação dele, ele
+  sai de vez, com os dados — e o aviso diz isso antes.
+
+O histórico mostra "Este vídeo saiu da Fila em …" nos arquivados. A
+confirmação de exclusão da Fila avisa que os exportados continuam no
+histórico, e o resultado diz quantos foram para lá.
+
+### Verificado
+
+Typecheck; **514/514** (10 novos em `tests/historicoExportacoes.test.ts`:
+apagar sem exportação, arquivar preservando CTA próprio e legenda, capa mantida
+e arquivos pesados removidos, reimportação, "Terminar os N com erro" e contagem,
+exclusão em lote, MP4 mantido por padrão e apagado só quando pedido, última
+exportação de arquivado). Migração conferida numa **cópia do banco real** (API
+de backup, original só leitura): coluna criada, os 98 vídeos continuam na Fila,
+`foreign_key_check` limpo. `next build` limpo, numa cópia isolada.
+
+**Não verificado:** as telas (confirmações e o cartão de remover).

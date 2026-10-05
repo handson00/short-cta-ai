@@ -187,9 +187,10 @@ export default function Library() {
     const ids = [...selectedIds];
     if (ids.length === 0) return;
     const confirmado = window.confirm(
-      ids.length === 1
-        ? "Excluir este vídeo? A ação não pode ser desfeita."
-        : `Excluir ${ids.length} vídeos selecionados? A ação não pode ser desfeita.`,
+      (ids.length === 1
+        ? "Excluir este vídeo da Fila? A ação não pode ser desfeita."
+        : `Excluir ${ids.length} vídeos selecionados da Fila? A ação não pode ser desfeita.`) +
+        "\n\nOs que já foram exportados continuam no histórico de Exportações, com legendas e hashtags — só saem de lá se você apagar lá.",
     );
     if (!confirmado) return;
 
@@ -202,6 +203,7 @@ export default function Library() {
       });
       const data = (await res.json().catch(() => ({}))) as {
         deletedCount?: number;
+        archived?: string[];
         failed?: { id: string; reason: string }[];
         error?: string;
       };
@@ -209,6 +211,12 @@ export default function Library() {
         alert(data.error ?? "Falha ao excluir os vídeos.");
       } else if (data.failed?.length) {
         alert(`${data.deletedCount ?? 0} excluídos. ${data.failed.length} falharam: ${data.failed[0].reason}`);
+      } else if (data.archived?.length) {
+        // Dizer, não esconder: quem exclui e depois acha o vídeo em Exportações
+        // precisa saber que foi de propósito.
+        alert(
+          `${data.deletedCount ?? 0} saíram da Fila. ${data.archived.length} deles já tinham exportação e continuam no histórico de Exportações.`,
+        );
       }
       setSelectedIds(new Set());
       if (selectedVideo && ids.includes(selectedVideo.id)) setSelectedVideo(null);

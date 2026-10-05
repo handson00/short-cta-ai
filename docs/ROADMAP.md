@@ -132,7 +132,8 @@ Nasceu dos pedidos do usuário durante o uso, não do escopo original.
 | 4.3 | Legenda em português + 2 hashtags, por vídeo ou em lote | ✅ a principal; hashtags conferidas em 2 vídeos reais |
 | 4.4 | Legenda em japonês + 1 hashtag japonesa, num botão à parte | ✅ conferida em 2 vídeos reais; ligável em Configurações |
 | 4.6 | Retomar os vídeos que pararam por cota | ✅ 2026-10-01 — botão no bloco Progresso (HISTORICO §39) |
-| 4.5 | Publicar direto na plataforma | ❌ não feito e não pedido. Exigiria API oficial e conta de negócios |
+| 4.7 | Enviar para a extensão "Agendador IG" (rascunho, com o que foi marcado) | ⚠️ 2026-10-02 — rotas, regras e build testados; a extensão no Chrome não conferida (HISTORICO §46) |
+| 4.5 | Publicar direto na plataforma | ❌ não feito. O 4.7 cobre o agendamento pela extensão do usuário, sem API oficial |
 
 ---
 

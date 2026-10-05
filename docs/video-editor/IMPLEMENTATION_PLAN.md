@@ -30,6 +30,7 @@ Legenda: ✅ pronto e verificado · ⚠️ parcial · ❌ não feito
 | 11 | Efeitos (espelhar, cortar, cor, velocidade, zoom, melhorar áudio) | ⚠️ 2026-09-30 — exportação medida no FFmpeg real; tela não conferida. 98 vídeos já têm efeitos |
 | 12 | Página de Exportações (feed vertical + dados para publicar) | ⚠️ 2026-09-30 — rotas e dados testados; o gesto no navegador não foi conferido |
 | 10 | Texto (CTA) e áudio | ✅ 2026-09-29 · 10.2 "Outro CTA" (trocar pelos CTAs gerados, com o estilo) em 2026-09-30 — tela não conferida |
+| 13 | Exportação na RTX 4050 (e nas duas placas juntas) | ❌ **próxima fase**, decidida pelo usuário em 2026-10-02 — não iniciar antes de ele pedir. Medição em HISTORICO §45 |
 
 ---
 
@@ -839,6 +840,82 @@ ali mesmo, e toda alteração já ficar salva e aparecer no preview na hora.
 - O último quadro do vídeo (33 ms) se perde no encerramento pelo `shortest=1`.
 - Apagar o texto próprio volta ao CTA; para um vídeo sair **sem** texto, use um
   template sem texto.
+
+---
+
+## Fase 13 — Exportação na RTX 4050 · ❌ próxima fase
+
+**Planejada em 2026-10-02, não iniciada.** O usuário decidiu que é a próxima
+fase, mas não agora. Não comece sem ele pedir. A medição que a justifica está
+em `HISTORICO.md` §45.
+
+### O problema
+
+A exportação roda na GPU integrada (Intel UHD, `h264_qsv`) e a deixa a 100%,
+embora a máquina tenha uma RTX 4050 Laptop de 6 GB. O código já prefere a
+NVIDIA (`ENCODER_PRIORITY` em `encoder.ts`); ela só não é usada porque o
+**NVENC não abre**: o FFmpeg 9.0.1 exige driver NVIDIA **≥ 610** e o instalado
+é o **572.40**.
+
+### Por que vale a pena (medido, HISTORICO §45)
+
+| | Intel (hoje) | RTX 4050 | As duas juntas |
+| --- | --- | --- | --- |
+| 60 s de vídeo exportados em | 8,3 s | 6,2 s | — |
+| Vazão (quadros/s) | 209 | 288 | 410 |
+| Pior quadro, vídeo complexo, 10 Mbps (VMAF) | 93,9 | 96,7 | — |
+| Quadros com VMAF < 90, complexo a 3 Mbps | 18 | 0 | — |
+
+Na taxa que o app exporta (10 Mbps), a qualidade **média** das duas é igual
+(VMAF 98,7). O ganho está na velocidade e nas cenas difíceis.
+
+### Etapas
+
+**13.0 — Pré-requisito (do usuário, não do código).** Atualizar o driver
+NVIDIA para 610 ou mais novo, pelo NVIDIA App, com instalação limpa.
+
+**13.1 — Conferir que a 4050 assumiu.** Nenhum código deveria mudar:
+
+- a subida do servidor deve logar `fila de exportação ativa (h264_nvenc, …)`;
+- exportar 1 vídeo e conferir com `ffprobe` (H.264 High 4.1, BT.709, AAC);
+- conferir que a **transcrição continua na GPU** (`npm run doctor` e uma
+  análise real). O `faster-whisper` também usa a NVIDIA, e driver novo costuma
+  manter as bibliotecas CUDA compatíveis, mas isso precisa ser medido aqui.
+
+**13.2 — O selo NVENC vermelho precisa dizer por quê.** Hoje `encoderWorks`
+descarta a mensagem do FFmpeg (`catch { ok = false }`), e a tela só mostra
+"NVENC" em vermelho. Foi isso que deixou a 4050 parada sem ninguém saber: é o
+princípio 2 do HANDOFF — falha não pode parecer ausência. Guardar o motivo
+(ex.: "driver 572.40; este FFmpeg pede 610+") e mostrá-lo no selo e no log.
+
+**13.3 — Opcional: as duas placas ao mesmo tempo.** A fila passa a dar **um job
+para cada encoder** (NVENC + QSV), em vez de 2 no mesmo. Medido: +38% sobre só
+a NVIDIA. Pontos a decidir com o usuário antes de fazer:
+
+- paralelizar no mesmo encoder **não ajuda** (Intel +12%, NVIDIA +2% — a 4050
+  de notebook tem um NVENC só), então `concurrency: 2` hoje gasta à toa;
+- num lote misto, os vídeos da Intel saem um pouco piores nas cenas difíceis.
+  A 10 Mbps a diferença é imperceptível, mas o lote deixa de ser uniforme;
+- cada job grava qual encoder usou, para dar para rastrear um vídeo ruim.
+
+### O que já foi decidido, para não refazer
+
+- **Manter o preset `p5` da NVIDIA.** `p7` + AQ espacial/temporal foi medido:
+  é mais lento e teve **pior** VMAF (63 quadros < 90 contra 0 do `p5`). A olho,
+  ampliado, não se distingue.
+- **Não usar o `veryslow` da Intel.** Fica 50% mais lento e quase não melhora.
+- **Não exportar pela CPU.** 3× mais lenta, com o processador a 90%.
+- **AV1 fica só registrado.** Foi o melhor do teste (VMAF 98,9 a 3 Mbps, 406
+  quadros/s), mas as plataformas recebem H.264 com mais segurança, e a Intel UHD
+  não codifica AV1.
+- **Medir com o plano de energia certo.** O teste rodou no plano "Silent" do
+  notebook; repetir a medição da 13.1 no plano de desempenho.
+
+### Critério de aceite
+
+`typecheck`, `tests` e `build` limpos; log da subida com `h264_nvenc`; um vídeo
+exportado conferido no `ffprobe`; transcrição medida na GPU depois do driver
+novo; selo NVENC com o motivo quando falhar.
 
 ---
 

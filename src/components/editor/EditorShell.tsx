@@ -849,7 +849,9 @@ export default function EditorShell() {
       <ExportQueuePanel refreshKey={queueRefresh} onSummary={setExportSummary} />
 
       <div className="flex gap-6">
-        <div className="w-[320px] shrink-0 space-y-2 self-start">
+        {/* Fixo como o painel de Recorte/Preview: só a lista "Na edição" rola.
+            Mais alto que a tela, rola por dentro — `pr-1` afasta a barra do conteúdo. */}
+        <div className="scroll-thin sticky top-[72px] max-h-[calc(100vh-88px)] w-[320px] shrink-0 space-y-2 self-start overflow-y-auto pr-1">
           <div className="flex items-center gap-1 rounded-lg border border-ink-800 bg-ink-950/60 p-1">
             {(
               [

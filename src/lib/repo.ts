@@ -40,6 +40,8 @@ export interface VideoRecord {
   platformVideoId: string | null;
   originalUrl: string | null;
   createdAt: string;
+  /** Saiu da Fila e ficou só no histórico de Exportações (HISTORICO §47). */
+  archivedAt: string | null;
 }
 
 interface VideoRow {
@@ -64,6 +66,7 @@ interface VideoRow {
   original_url: string | null;
   thumbnail_path: string | null;
   created_at: string;
+  archived_at: string | null;
 }
 
 function mapVideo(row: VideoRow): VideoRecord {
@@ -89,6 +92,7 @@ function mapVideo(row: VideoRow): VideoRecord {
     originalUrl: row.original_url,
     thumbnailPath: row.thumbnail_path,
     createdAt: row.created_at,
+    archivedAt: row.archived_at ?? null,
   };
 }
 
@@ -161,18 +165,25 @@ export function getVideo(id: string): VideoRecord | null {
   return row ? mapVideo(row) : null;
 }
 
+/**
+ * O vídeo da Fila com este conteúdo. O arquivado não conta: ele não está na
+ * Fila, e reimportar o mesmo arquivo não pode ser "ignorado por duplicado"
+ * sem nada aparecer na tela — vira um vídeo novo.
+ */
 export function findVideoByHash(hash: string): VideoRecord | null {
-  const row = db().prepare("SELECT * FROM videos WHERE hash = ? ORDER BY created_at DESC LIMIT 1").get(hash) as
-    | VideoRow
-    | undefined;
+  const row = db()
+    .prepare("SELECT * FROM videos WHERE hash = ? AND archived_at IS NULL ORDER BY created_at DESC LIMIT 1")
+    .get(hash) as VideoRow | undefined;
   return row ? mapVideo(row) : null;
 }
 
+/** Os vídeos da Fila. Os arquivados só aparecem no histórico de Exportações. */
 export function listVideos(): VideoRecord[] {
-  const rows = db().prepare("SELECT * FROM videos ORDER BY created_at DESC").all() as VideoRow[];
+  const rows = db().prepare("SELECT * FROM videos WHERE archived_at IS NULL ORDER BY created_at DESC").all() as VideoRow[];
   return rows.map(mapVideo);
 }
 
+/** Apaga o vídeo de vez: dados, arquivos e — pela cascata — o histórico de exportação dele. */
 export function deleteVideo(id: string): void {
   const video = getVideo(id);
   if (!video) return;
@@ -180,10 +191,76 @@ export function deleteVideo(id: string): void {
   db().prepare("DELETE FROM videos WHERE id = ?").run(id);
 }
 
+/** Tem exportação no histórico (job concluído), com ou sem o arquivo ainda na pasta. */
+export function hasCompletedExport(videoId: string): boolean {
+  return !!db()
+    .prepare("SELECT 1 FROM editor_jobs WHERE video_id = ? AND status = 'completed' AND output_path IS NOT NULL LIMIT 1")
+    .get(videoId);
+}
+
+/**
+ * Tira o vídeo da Fila (HISTORICO §47).
+ *
+ * Com exportação no histórico, ele é ARQUIVADO: sai da Fila e do Editor, mas
+ * os dados ficam — legendas, hashtags, transcrição, CTA, enredo —, porque o
+ * usuário volta ao histórico para pegar informação do vídeo. Só sai de vez
+ * quando a última exportação dele for apagada do histórico.
+ *
+ * Sem exportação, apaga como sempre apagou.
+ *
+ * Quem chama cancela antes o que estiver rodando (análise e exportação).
+ */
+export function removeFromQueue(id: string): "apagado" | "arquivado" | null {
+  const video = getVideo(id);
+  if (!video) return null;
+  if (!hasCompletedExport(id)) {
+    deleteVideo(id);
+    return "apagado";
+  }
+  if (!video.archivedAt) {
+    db().transaction(() => {
+      db().prepare("UPDATE videos SET archived_at = ? WHERE id = ?").run(nowIso(), id);
+      // Fora do Editor e da coleta de comentários. O texto próprio, os efeitos
+      // e o recorte ficam: eles apontam para o vídeo, não para o Editor, e o
+      // CTA do histórico sai do texto próprio.
+      db().prepare("DELETE FROM editor_videos WHERE video_id = ?").run(id);
+      db().prepare("DELETE FROM capture_queue WHERE video_id = ? AND status IN ('pending', 'processing')").run(id);
+    })();
+  }
+  removeHeavyFiles(video);
+  return "arquivado";
+}
+
 function removeFiles(video: VideoRecord): void {
   fs.rmSync(video.path, { force: true });
   if (video.thumbnailPath) fs.rmSync(video.thumbnailPath, { force: true });
   fs.rmSync(path.join(env.artifactsDir, video.id), { recursive: true, force: true });
+}
+
+/**
+ * Do arquivado sai o que pesa: o vídeo enviado e os artefatos da análise
+ * (áudio, frames). A miniatura fica — é a capa do vídeo no histórico.
+ *
+ * Arquivo preso por outro programa não impede o arquivamento: o vídeo já saiu
+ * da Fila, e o que sobrar no disco não aparece em lugar nenhum.
+ */
+function removeHeavyFiles(video: VideoRecord): void {
+  const tentar = (fn: () => void) => {
+    try {
+      fn();
+    } catch {
+      // EBUSY no Windows: fica para quando o vídeo for apagado de vez.
+    }
+  };
+  tentar(() => fs.rmSync(video.path, { force: true }));
+  const dir = path.join(env.artifactsDir, video.id);
+  if (!fs.existsSync(dir)) return;
+  const capa = video.thumbnailPath ? path.resolve(video.thumbnailPath) : null;
+  for (const nome of fs.readdirSync(dir)) {
+    const alvo = path.join(dir, nome);
+    if (capa && path.resolve(alvo) === capa) continue;
+    tentar(() => fs.rmSync(alvo, { recursive: true, force: true }));
+  }
 }
 
 // ---------------------------------- Jobs ------------------------------------
@@ -322,6 +399,7 @@ export function listFailedVideos(): Array<{ id: string; mode: JobMode; errorCode
     .prepare(
       `SELECT j.video_id, j.mode, j.error_code FROM analysis_jobs j
        WHERE j.status = 'error'
+         AND j.video_id IN (SELECT id FROM videos WHERE archived_at IS NULL)
          AND j.rowid = (SELECT j2.rowid FROM analysis_jobs j2 WHERE j2.video_id = j.video_id
                         ORDER BY j2.created_at DESC, j2.rowid DESC LIMIT 1)`,
     )
@@ -1204,7 +1282,7 @@ export function getVideoHashtags(videoId: string): {
 /** Acha o video pelo codigo do post, do jeito que a extensao conhece o video. */
 export function findVideoByPlatformId(platform: string, platformVideoId: string): { id: string } | null {
   const row = db()
-    .prepare("SELECT id FROM videos WHERE platform = ? AND platform_video_id = ? AND purged_at IS NULL LIMIT 1")
+    .prepare("SELECT id FROM videos WHERE platform = ? AND platform_video_id = ? AND purged_at IS NULL AND archived_at IS NULL LIMIT 1")
     .get(platform, platformVideoId) as { id: string } | undefined;
   return row ?? null;
 }

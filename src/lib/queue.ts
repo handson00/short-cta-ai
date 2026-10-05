@@ -45,6 +45,8 @@ export function claimNextJob(lane?: QueueLane): ClaimedJob | null {
         `SELECT id, video_id, attempts, max_attempts, reuse_scene, mode FROM analysis_jobs
          WHERE status = 'queued' AND cancel_requested = 0
            AND (lease_expires_at IS NULL OR lease_expires_at < ?) ${laneFilter}
+           -- Arquivado (fora da Fila) não volta a ser analisado: o vídeo enviado já foi apagado.
+           AND video_id IN (SELECT id FROM videos WHERE archived_at IS NULL)
          ORDER BY created_at LIMIT 1`,
       )
       .get(nowIso()) as
@@ -122,7 +124,8 @@ export function queueCounts(): Record<string, number> {
       // Um job por vídeo — o mais recente, com o mesmo desempate por rowid de
       // `repo.latestJob`; por MAX(created_at), um empate contava o vídeo duas vezes.
       `SELECT status, COUNT(*) AS total FROM analysis_jobs j
-       WHERE j.rowid = (SELECT j2.rowid FROM analysis_jobs j2 WHERE j2.video_id = j.video_id
+       WHERE j.video_id IN (SELECT id FROM videos WHERE archived_at IS NULL)
+         AND j.rowid = (SELECT j2.rowid FROM analysis_jobs j2 WHERE j2.video_id = j.video_id
                         ORDER BY j2.created_at DESC, j2.rowid DESC LIMIT 1)
        GROUP BY status`,
     )

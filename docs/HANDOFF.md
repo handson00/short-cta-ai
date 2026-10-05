@@ -1,7 +1,7 @@
 # Short CTA AI — Handoff
 
 **Leia este arquivo primeiro.** Ele descreve o estado real do projeto em
-2026-09-29: o que funciona, o que está pendente e o que fazer a seguir.
+2026-10-02: o que funciona, o que está pendente e o que fazer a seguir.
 
 Companheiros deste documento:
 
@@ -187,6 +187,15 @@ Verificado de ponta a ponta, com vídeos reais:
     Configurações, para publicar também em japonês.
   - Cada um roda no vídeo aberto ou em todos da lista. Vídeo que já tem é
     pulado, para não gastar chamada à toa.
+- **Histórico que sobrevive à Fila** (HISTORICO §47): excluir da Fila um vídeo
+  já exportado só o **arquiva** (`videos.archived_at`) — sai da Fila e do
+  Editor, fica no histórico com os dados. Sai de vez quando a última exportação
+  dele é removida do histórico ("🗑 Remover do histórico"; o MP4 da pasta só é
+  apagado se pedido). **Toda consulta nova de "vídeos da Fila" precisa filtrar
+  `archived_at IS NULL`.**
+- **"✈ Enviar para o Agendador IG"** (HISTORICO §46): manda o vídeo e o que foi
+  marcado (legendas, hashtags) para a extensão de agendamento do usuário, como
+  rascunho no próximo horário livre. Ver §12. Tela e extensão não conferidas.
 - **5 hashtags por vídeo** (2 capturadas + 2 em português + 1 em japonês), que
   é o limite da plataforma. Na tela: cinza, verde e azul.
 - Conferido em 2026-09-30, com chamadas reais: num corte de viagem no tempo
@@ -365,12 +374,27 @@ src/
 4. Os comandos rodam direto no Windows (PowerShell): dá para rodar build,
    testes e o servidor daqui.
 5. Pendências por ordem de valor:
-   - **Commitar.** Nada desde `c59d36a` (2026-09-29 11:36) foi para o git:
-     são as entregas dos §23 a §37, mais de 70 arquivos. É a pendência mais
-     cara — todo o trabalho de dois dias está só no disco.
-   - **Buildar e reiniciar.** O servidor ainda roda o build de 16:50 de
-     2026-09-30: nada do §39 em diante está no ar, e a migração das legendas
-     só roda na subida.
+   - ~~**Commitar.**~~ Feito em 2026-09-30, à noite: os §23 a §41 estão em
+     `8cf4cc3`, `ed45982`, `00b578f` e `8939729`. A árvore está limpa.
+   - ~~**Buildar e reiniciar.**~~ Feito em 2026-10-02 (§42). O build de
+     produção não existia mais — `npm start` recusava por falta de `BUILD_ID`.
+     Buildado, no ar, e **a migração das legendas rodou e foi conferida no
+     banco real**: `video_captions` criada, as 2 legendas japonesas inteiras,
+     `ia_ja_json` criada, `foreign_key_check` limpo.
+   - **Terminar os 11 vídeos parados na cota** pelo botão "↻ Terminar os 11
+     com erro" (§39). A cota diária do Gemini já renovou e o botão agora
+     existe no ar.
+   - **Conferir o envio ao Agendador IG** (§12, HISTORICO §46): carregar a
+     extensão 0.5.0 da pasta do projeto no lugar da de `Downloads`, recarregar
+     Instagram e Exportações, e mandar um vídeo pelo "✈". Código, rotas e build
+     testados; a parte que roda dentro do Chrome não.
+   - **Próxima fase planejada: exportar na RTX 4050** (Fase 13 de
+     [`video-editor/IMPLEMENTATION_PLAN.md`](./video-editor/IMPLEMENTATION_PLAN.md)).
+     Hoje a exportação roda na Intel integrada porque o driver NVIDIA (572.40)
+     é velho para o FFmpeg 9.0.1, que pede 610+. Medido em HISTORICO §45: a
+     4050 é 38% mais rápida e segura melhor as cenas difíceis. **Decidida pelo
+     usuário em 2026-10-02, mas não para agora** — não comece sem ele pedir.
+     O primeiro passo é dele: atualizar o driver.
    - **Conferir na tela** o que não teve conferência visual: a aba Efeitos, o
      feed de Exportações (o gesto de arrastar), o botão "Outro CTA", os perfis
      de origem (Fase 9), o som no preview do Editor, o botão "Terminar os N
@@ -412,17 +436,19 @@ prova de cada uma (HISTORICO §28 a §37):
 cota diária do Gemini esgotada**. É o caso que o §39 resolve — o botão
 "↻ Terminar os 11 com erro" no bloco Progresso, depois que a cota renovar.
 
-**A migração das legendas ainda não rodou** no banco do usuário: ela acontece
-no próximo `npm start`. Foi testada numa cópia do banco real, e as 2 legendas
-japonesas chegaram inteiras.
+**A migração das legendas rodou em 2026-10-02** (§42), no banco real, e foi
+conferida depois da subida: as 2 legendas japonesas chegaram inteiras, a tabela
+antiga saiu e o `foreign_key_check` ficou limpo.
 
 **Resolvido:** a captura de comentários em massa. Era a extensão antiga no
 Chrome; o usuário recarregou e os **98 pedidos foram atendidos — 26.704
 comentários**.
 
-**Em aberto:** os dois primeiros MP4 exportados (19:03) sumiram de
-`data/output` sem que nada no código os apague. Perguntado ao usuário, sem
-resposta ainda. Os 4 jobs seguintes estão com arquivo no lugar.
+**Respondido (§42):** os dois primeiros MP4 exportados (19:03) saíram de
+`data/output` por algo **de fora da aplicação**. Prova: o lote de 19:29 gravou
+nos mesmos nomes, e a `uniqueOutputPath` só reusa um nome que está livre — logo
+a pasta já estava sem eles. Nada no código apaga MP4 pronto; o único `unlink`
+dessa pasta remove `.processing`. Os 2 arquivos de hoje são os renders de 19:30.
 
 ### Antes disso (2026-09-29, noite)
 
@@ -535,3 +561,23 @@ mesmo sendo `import type`, o bundler puxava o `better-sqlite3` para o navegador.
 toque o banco em componentes `"use client"` — nem com `import type`.** Tipos que
 atravessam a fronteira vivem em `viewTypes.ts` ou `types.ts`, ou são declarados
 no próprio componente (como em `ExportQueuePanel.tsx`).
+
+---
+
+## 12. Extensão "Agendador IG" (agendamento no Instagram)
+
+Extensão do usuário, em `agendador-ig-extensao-v0.4.0/` (a pasta mantém o nome
+antigo de propósito; é a versão 0.5.0). **Leia o
+[`LEIA-ME.md`](../agendador-ig-extensao-v0.4.0/LEIA-ME.md) dela antes de mexer.**
+
+- **Não há código-fonte**: o painel é compilado. A integração não toca nele —
+  grava em `chrome.storage.local["agendador-ig/state"]` e no IndexedDB
+  `agendador-ig/videos`, do jeito que ele grava.
+- O sistema **não agenda nada no Instagram**: entrega o post como rascunho, e
+  quem programa é o painel da extensão, quando o usuário manda.
+- O vídeo vai por **ingresso** (`lib/agendador.ts`): link assinado de um vídeo,
+  15 min. Exige `APP_SESSION_SECRET` definida.
+- A extensão só fala com `localhost:3000` e `127.0.0.1:3000`. Aberto por IP da
+  rede, o botão explica que não dá.
+- Regras do painel copiadas em dois lugares — `lib/agendadorPost.ts` (texto) e
+  `ponte-horarios.js` (horário). Se o painel mudar, mudam juntas.

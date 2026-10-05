@@ -24,7 +24,11 @@ CREATE TABLE IF NOT EXISTS videos (
   platform_video_id TEXT,
   original_url TEXT,
   created_at TEXT NOT NULL,
-  purged_at TEXT
+  purged_at TEXT,
+  -- Saiu da Fila mas ficou no histórico de Exportações (HISTORICO §47). Os
+  -- dados continuam; os arquivos pesados, não. Bancos antigos ganham a coluna
+  -- em db.ts.
+  archived_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_videos_hash ON videos(hash);
 CREATE INDEX IF NOT EXISTS idx_videos_created ON videos(created_at DESC);
@@ -321,6 +325,19 @@ CREATE TABLE IF NOT EXISTS editor_jobs (
 );
 CREATE INDEX IF NOT EXISTS idx_editor_jobs_status ON editor_jobs(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_editor_jobs_video ON editor_jobs(video_id, created_at DESC);
+
+-- Exportações entregues à extensão "Agendador IG", como rascunho. Gravado só
+-- depois que a extensão confirma: um envio que falhou não pode aparecer como
+-- enviado. O post de verdade mora na extensão — esta linha é o recibo.
+CREATE TABLE IF NOT EXISTS agendador_envios (
+  export_job_id TEXT PRIMARY KEY REFERENCES editor_jobs(id) ON DELETE CASCADE,
+  video_id TEXT NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+  ext_post_id TEXT NOT NULL,
+  slot_date TEXT,
+  slot_time TEXT,
+  texto TEXT NOT NULL,
+  enviado_em TEXT NOT NULL
+);
 
 -- Vídeos promovidos da análise para a edição. A entrada na segunda fase é
 -- explícita: terminar a análise não joga o vídeo no editor sozinho, senão o

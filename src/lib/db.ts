@@ -28,6 +28,7 @@ export function db(): Database.Database {
   migrateAiProviderColumn(handle);
   migrateCaptionsTable(handle);
   migrateCaptureQueueUnique(handle);
+  migrateArchivedColumn(handle);
 
   instance = handle;
   return handle;
@@ -107,6 +108,12 @@ function migrateAiOnDemandColumns(handle: Database.Database): void {
  * INSERT de `logAiRequest` falharia — e ele engole o erro de propósito, então
  * "Uso da IA" pararia de registrar sem ninguém perceber.
  */
+/** Vídeo que saiu da Fila mas ficou no histórico de Exportações (HISTORICO §47). */
+function migrateArchivedColumn(handle: Database.Database): void {
+  const cols = new Set((handle.pragma("table_info(videos)") as { name: string }[]).map((c) => c.name));
+  if (!cols.has("archived_at")) handle.exec("ALTER TABLE videos ADD COLUMN archived_at TEXT");
+}
+
 function migrateAiProviderColumn(handle: Database.Database): void {
   const cols = new Set((handle.pragma("table_info(ai_request_logs)") as { name: string }[]).map((c) => c.name));
   if (!cols.has("provider")) handle.exec("ALTER TABLE ai_request_logs ADD COLUMN provider TEXT");

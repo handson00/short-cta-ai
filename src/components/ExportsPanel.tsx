@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import AgendadorEnvio, { type ReciboAgendador } from "./AgendadorEnvio";
 
 /** Tipos declarados aqui: componente cliente nunca importa de arquivo que toca o banco. */
 interface ExportItem {
@@ -29,10 +30,16 @@ interface ExportItem {
   workTitle: string | null;
   originalUrl: string | null;
   sourceLabel: string | null;
+  /** Último envio à extensão Agendador IG, se houve. */
+  agendador: ReciboAgendador | null;
+  /** O vídeo saiu da Fila e está guardado só aqui, no histórico. */
+  archivedAt: string | null;
 }
 
 /** Arrasto mínimo para trocar de vídeo. Menos que isso é toque, não gesto. */
 const SWIPE_PX = 60;
+/** Abaixo disto o gesto ainda é um clique (tremida da mão), não um arrasto. */
+const DRAG_START_PX = 6;
 
 function mb(bytes: number | null): string {
   return bytes === null ? "—" : `${(bytes / 1e6).toFixed(1)} MB`;
@@ -245,16 +252,23 @@ function Feed({
   }, [ir]);
 
   function onPointerDown(e: React.PointerEvent) {
-    // Só o botão principal, e nunca a partir dos controles do vídeo.
+    // Só o botão principal, e nunca a partir dos controles (som, setas).
     if (e.button !== 0) return;
+    if ((e.target as HTMLElement).closest("button")) return;
     startY.current = e.clientY;
     setDragging(true);
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
   }
 
   function onPointerMove(e: React.PointerEvent) {
     if (!dragging) return;
     const dy = e.clientY - startY.current;
+    // A captura só entra quando já é arrasto. Capturado desde o pointerdown,
+    // o navegador entrega o `click` à área de arrastar, não ao alvo: o botão
+    // de som não ligava o som e o toque no vídeo não pausava.
+    const area = e.currentTarget as HTMLElement;
+    if (Math.abs(dy) > DRAG_START_PX && !area.hasPointerCapture(e.pointerId)) {
+      area.setPointerCapture(e.pointerId);
+    }
     // Resistência nas pontas: puxar além do primeiro ou do último não desliza
     // a tela inteira, só cede um pouco — como no celular.
     const noLimite = (dy > 0 && index === 0) || (dy < 0 && index === lista.length - 1);
@@ -470,11 +484,20 @@ function DadosDoVideo({
             O arquivo não está mais nessa pasta (apagado, movido ou disco desconectado).
           </p>
         )}
+        {item.archivedAt && (
+          <p className="mt-2 rounded border border-ink-700 bg-ink-900/60 px-2 py-1 text-[11px] text-ink-400">
+            Este vídeo saiu da Fila em {hora(item.archivedAt)}. Ele está guardado só aqui, com os dados — até você
+            remover do histórico.
+          </p>
+        )}
         <div className="mt-2 flex flex-wrap gap-1">
           <CopyButton label="Caminho do arquivo" value={item.outputPath} />
           {item.originalUrl && <CopyButton label="Link de origem" value={item.originalUrl} />}
         </div>
+        <RemoverDoHistorico item={item} lista={lista} onRemovido={onGerado} />
       </div>
+
+      <AgendadorEnvio item={item} onEnviado={onGerado} />
 
       <Field label="Texto no vídeo (CTA)" value={item.cta} />
 
@@ -590,6 +613,113 @@ function DadosDoVideo({
       <Field label="Enredo (pela fala)" value={item.plot} collapsed />
       <Field label="Transcrição" value={item.transcript} collapsed />
     </section>
+  );
+}
+
+/**
+ * "Remover do histórico", com a confirmação no próprio cartão.
+ *
+ * Não é `window.confirm` porque há uma escolha a fazer — apagar ou não o MP4
+ * da pasta — e ela não cabe num OK/Cancelar. O padrão é manter o arquivo: é o
+ * vídeo pronto para publicar, numa pasta que é do usuário.
+ */
+function RemoverDoHistorico({
+  item,
+  lista,
+  onRemovido,
+}: {
+  item: ExportItem;
+  lista: ExportItem[];
+  onRemovido: () => Promise<void>;
+}) {
+  const [aberto, setAberto] = useState(false);
+  const [apagarArquivo, setApagarArquivo] = useState(false);
+  const [removendo, setRemovendo] = useState(false);
+  const [erro, setErro] = useState<string | null>(null);
+
+  // Ao trocar de vídeo, a confirmação aberta não pode valer para o próximo.
+  useEffect(() => {
+    setAberto(false);
+    setApagarArquivo(false);
+    setErro(null);
+  }, [item.jobId]);
+
+  // A lista da tela pode estar filtrada ("Desta sessão"): o servidor é quem
+  // decide de verdade. Isto só serve para o aviso.
+  const ultimaDoVideo = lista.filter((x) => x.videoId === item.videoId).length <= 1;
+  const somePraSempre = item.archivedAt !== null && ultimaDoVideo;
+
+  async function remover() {
+    setRemovendo(true);
+    setErro(null);
+    try {
+      const res = await fetch(
+        `/api/exports/${encodeURIComponent(item.jobId)}${apagarArquivo ? "?apagarArquivo=1" : ""}`,
+        { method: "DELETE" },
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+      setAberto(false);
+      await onRemovido();
+    } catch (err) {
+      setErro(err instanceof Error ? err.message : "Falha ao remover.");
+    } finally {
+      setRemovendo(false);
+    }
+  }
+
+  if (!aberto) {
+    return (
+      <div className="mt-2 flex justify-end">
+        <button
+          onClick={() => setAberto(true)}
+          className="rounded-md px-2 py-0.5 text-[10px] text-ink-500 transition hover:text-red-300"
+        >
+          🗑 Remover do histórico
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-2 rounded-md border border-red-900/60 bg-red-950/20 p-2 text-[11px] text-ink-300">
+      <p>
+        {somePraSempre
+          ? "Este vídeo já saiu da Fila e esta é a última exportação dele: removendo, ele e os dados dele (legendas, hashtags, transcrição) são apagados de vez."
+          : item.archivedAt
+            ? "Remove esta exportação do histórico. As outras exportações deste vídeo continuam aqui."
+            : "Remove esta exportação do histórico. O vídeo continua na Fila."}
+      </p>
+      <label className="mt-1.5 flex cursor-pointer items-center gap-1.5">
+        <input
+          type="checkbox"
+          checked={apagarArquivo}
+          onChange={(e) => setApagarArquivo(e.target.checked)}
+          disabled={item.fileMissing}
+          className="accent-red-400"
+        />
+        {item.fileMissing
+          ? "O arquivo MP4 já não está na pasta."
+          : `Apagar também o arquivo ${item.fileName} da pasta`}
+      </label>
+      <div className="mt-2 flex gap-2">
+        <button
+          onClick={() => void remover()}
+          disabled={removendo}
+          className="rounded-md bg-red-600/80 px-2 py-0.5 text-[11px] text-white transition hover:bg-red-600 disabled:opacity-50"
+        >
+          {removendo ? "Removendo…" : "Remover"}
+        </button>
+        <button
+          onClick={() => setAberto(false)}
+          disabled={removendo}
+          className="rounded-md border border-ink-700 px-2 py-0.5 text-[11px] text-ink-400 transition hover:text-ink-200"
+        >
+          Cancelar
+        </button>
+      </div>
+      {erro && <p className="mt-1.5 text-red-300">{erro}</p>}
+    </div>
   );
 }
 
